@@ -11,6 +11,7 @@ use App\Entity\User;
 use App\Pagination\PaginatedResponse;
 use App\Pagination\PaginationRequest;
 use App\Pagination\Paginator;
+use App\Repository\RoleRepository;
 use App\Repository\UserRepository;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\HttpKernel\Exception\ConflictHttpException;
@@ -22,6 +23,7 @@ final readonly class UserService
     public function __construct(
         private EntityManagerInterface $em,
         private UserRepository $userRepository,
+        private RoleRepository $roleRepository,
         private UserPasswordHasherInterface $passwordHasher,
         private Paginator $paginator,
     ) {
@@ -69,6 +71,11 @@ final readonly class UserService
         $user->setPassword($this->passwordHasher->hashPassword($user, $request->password));
         $user->setRoles($request->roles);
 
+        if ($request->roleId !== null) {
+            $role = $this->roleRepository->find($request->roleId);
+            $user->setRole($role);
+        }
+
         $this->em->persist($user);
         $this->em->flush();
 
@@ -101,6 +108,11 @@ final readonly class UserService
 
         if ($request->roles !== null) {
             $user->setRoles($request->roles);
+        }
+
+        if ($request->roleId !== null) {
+            $role = $this->roleRepository->find($request->roleId);
+            $user->setRole($role);
         }
 
         $this->em->flush();

@@ -13,6 +13,9 @@ final readonly class UserResponse
     public string $email;
     /** @var list<string> */
     public array $roles;
+    public ?int $roleId;
+    public ?string $roleName;
+    public bool $active;
     public string $createdAt;
 
     public function __construct(User $user)
@@ -21,6 +24,9 @@ final readonly class UserResponse
         $this->name = $user->getName();
         $this->email = $user->getEmail();
         $this->roles = $user->getRoles();
+        $this->roleId = $user->getRole()?->getId();
+        $this->roleName = $user->getRole()?->getName();
+        $this->active = $user->isActive();
         $this->createdAt = $user->getCreatedAt()->format(\DateTimeInterface::ATOM);
     }
 }

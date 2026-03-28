@@ -26,6 +26,9 @@ final readonly class CreateUserRequest
             new Assert\Choice(choices: ['ROLE_USER', 'ROLE_ADMIN']),
         ])]
         public array $roles = [],
+
+        #[Assert\Positive]
+        public ?int $roleId = null,
     ) {
     }
 }

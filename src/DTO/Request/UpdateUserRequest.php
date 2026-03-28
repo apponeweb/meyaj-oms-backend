@@ -23,6 +23,9 @@ final readonly class UpdateUserRequest
             new Assert\Choice(choices: ['ROLE_USER', 'ROLE_ADMIN']),
         ])]
         public ?array $roles = null,
+
+        #[Assert\Positive]
+        public ?int $roleId = null,
     ) {
     }
 }
