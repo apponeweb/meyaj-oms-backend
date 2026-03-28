@@ -36,6 +36,9 @@ php bin/console doctrine:migrations:migrate
 # Generar claves JWT
 php bin/console lexik:jwt:generate-keypair
 
+# Cargar datos iniciales (módulos, acciones, roles y permisos)
+php bin/console app:seed-modules
+
 # Iniciar servidor de desarrollo
 symfony server:start
 ```
