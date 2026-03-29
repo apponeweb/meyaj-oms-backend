@@ -12,7 +12,7 @@ use Symfony\Bridge\Doctrine\Validator\Constraints\UniqueEntity;
 use Symfony\Component\Validator\Constraints as Assert;
 
 #[ORM\Entity(repositoryClass: AppModuleRepository::class)]
-#[ORM\Table(name: 'app_module')]
+#[ORM\Table(name: 'app_module', options: ['comment' => 'Módulos principales del sistema (Catálogos, Seguridad, Ventas, etc.) que agrupan funcionalidades'])]
 #[ORM\HasLifecycleCallbacks]
 #[UniqueEntity(fields: ['code'], message: 'Este código de módulo ya existe')]
 class AppModule

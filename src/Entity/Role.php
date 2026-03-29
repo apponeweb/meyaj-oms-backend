@@ -12,7 +12,7 @@ use Symfony\Bridge\Doctrine\Validator\Constraints\UniqueEntity;
 use Symfony\Component\Validator\Constraints as Assert;
 
 #[ORM\Entity(repositoryClass: RoleRepository::class)]
-#[ORM\Table(name: 'role')]
+#[ORM\Table(name: 'app_role', options: ['comment' => 'Roles del sistema que agrupan permisos de acceso a módulos y acciones sobre funcionalidades'])]
 #[ORM\HasLifecycleCallbacks]
 #[UniqueEntity(fields: ['name'], message: 'Este rol ya existe')]
 class Role

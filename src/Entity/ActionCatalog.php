@@ -10,7 +10,7 @@ use Symfony\Bridge\Doctrine\Validator\Constraints\UniqueEntity;
 use Symfony\Component\Validator\Constraints as Assert;
 
 #[ORM\Entity(repositoryClass: ActionCatalogRepository::class)]
-#[ORM\Table(name: 'action_catalog')]
+#[ORM\Table(name: 'app_action_catalog', options: ['comment' => 'Catálogo de acciones disponibles en el sistema (crear, leer, actualizar, eliminar, exportar)'])]
 #[UniqueEntity(fields: ['code'], message: 'Esta acción ya existe')]
 class ActionCatalog
 {

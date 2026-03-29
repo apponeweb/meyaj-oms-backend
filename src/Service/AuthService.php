@@ -7,6 +7,7 @@ namespace App\Service;
 use App\DTO\Request\RegisterRequest;
 use App\DTO\Response\UserResponse;
 use App\Entity\User;
+use App\Repository\RoleRepository;
 use App\Repository\UserRepository;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\HttpKernel\Exception\ConflictHttpException;
@@ -17,6 +18,7 @@ final readonly class AuthService
     public function __construct(
         private EntityManagerInterface $em,
         private UserRepository $userRepository,
+        private RoleRepository $roleRepository,
         private UserPasswordHasherInterface $passwordHasher,
     ) {
     }
@@ -33,6 +35,11 @@ final readonly class AuthService
         $user->setName($request->name);
         $user->setEmail($request->email);
         $user->setPassword($this->passwordHasher->hashPassword($user, $request->password));
+
+        $adminRole = $this->roleRepository->findOneBy(['name' => 'Admin']);
+        if ($adminRole !== null) {
+            $user->setRole($adminRole);
+        }
 
         $this->em->persist($user);
         $this->em->flush();

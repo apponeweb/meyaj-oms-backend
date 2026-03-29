@@ -19,12 +19,26 @@ class RoleActionPermissionRepository extends ServiceEntityRepository
     }
 
     /** @return RoleActionPermission[] */
-    public function findByRoleAndModule(int $roleId, int $moduleId): array
+    public function findByRoleAndFunction(int $roleId, int $functionId): array
     {
         return $this->createQueryBuilder('rap')
             ->join('rap.action', 'a')
             ->where('rap.role = :roleId')
-            ->andWhere('rap.appModule = :moduleId')
+            ->andWhere('rap.appFunction = :functionId')
+            ->andWhere('rap.allowed = true')
+            ->setParameter('roleId', $roleId)
+            ->setParameter('functionId', $functionId)
+            ->getQuery()
+            ->getResult();
+    }
+
+    /** @return RoleActionPermission[] */
+    public function findByRoleAndModuleFunctions(int $roleId, int $moduleId): array
+    {
+        return $this->createQueryBuilder('rap')
+            ->join('rap.appFunction', 'f')
+            ->where('rap.role = :roleId')
+            ->andWhere('f.appModule = :moduleId')
             ->andWhere('rap.allowed = true')
             ->setParameter('roleId', $roleId)
             ->setParameter('moduleId', $moduleId)

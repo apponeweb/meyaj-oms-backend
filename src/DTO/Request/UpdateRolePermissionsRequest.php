@@ -9,7 +9,11 @@ use Symfony\Component\Validator\Constraints as Assert;
 final readonly class UpdateRolePermissionsRequest
 {
     /**
-     * @param array<int, array{moduleCode: string, canAccess: bool, actions: array<string, bool>}> $permissions
+     * @param array<int, array{
+     *   moduleCode: string,
+     *   canAccess: bool,
+     *   functions: array<int, array{functionCode: string, actions: array<string, bool>}>
+     * }> $permissions
      */
     public function __construct(
         #[Assert\NotBlank]

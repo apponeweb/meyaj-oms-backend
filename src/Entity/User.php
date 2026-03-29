@@ -12,7 +12,7 @@ use Symfony\Component\Security\Core\User\UserInterface;
 use Symfony\Component\Validator\Constraints as Assert;
 
 #[ORM\Entity(repositoryClass: UserRepository::class)]
-#[ORM\Table(name: '`user`')]
+#[ORM\Table(name: 'app_user', options: ['comment' => 'Usuarios del sistema con credenciales de acceso, rol asignado y estado activo/inactivo'])]
 #[ORM\HasLifecycleCallbacks]
 #[UniqueEntity(fields: ['email'], message: 'Este email ya está registrado')]
 class User implements UserInterface, PasswordAuthenticatedUserInterface

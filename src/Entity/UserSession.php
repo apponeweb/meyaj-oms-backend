@@ -8,7 +8,7 @@ use App\Repository\UserSessionRepository;
 use Doctrine\ORM\Mapping as ORM;
 
 #[ORM\Entity(repositoryClass: UserSessionRepository::class)]
-#[ORM\Table(name: 'user_session')]
+#[ORM\Table(name: 'app_user_session', options: ['comment' => 'Registro de sesiones de usuario, rastreando login, logout, actividad y expiración por inactividad'])]
 #[ORM\Index(columns: ['active'], name: 'idx_session_active')]
 class UserSession
 {
@@ -37,11 +37,15 @@ class UserSession
     private ?\DateTimeImmutable $logoutAt = null;
 
     #[ORM\Column]
+    private \DateTimeImmutable $lastActivityAt;
+
+    #[ORM\Column]
     private bool $active = true;
 
     public function __construct()
     {
         $this->loginAt = new \DateTimeImmutable();
+        $this->lastActivityAt = new \DateTimeImmutable();
     }
 
     public function getId(): ?int
@@ -106,6 +110,17 @@ class UserSession
     public function setLogoutAt(?\DateTimeImmutable $logoutAt): static
     {
         $this->logoutAt = $logoutAt;
+        return $this;
+    }
+
+    public function getLastActivityAt(): \DateTimeImmutable
+    {
+        return $this->lastActivityAt;
+    }
+
+    public function setLastActivityAt(\DateTimeImmutable $lastActivityAt): static
+    {
+        $this->lastActivityAt = $lastActivityAt;
         return $this;
     }
 

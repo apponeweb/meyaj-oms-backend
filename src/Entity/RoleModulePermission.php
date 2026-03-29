@@ -8,7 +8,7 @@ use App\Repository\RoleModulePermissionRepository;
 use Doctrine\ORM\Mapping as ORM;
 
 #[ORM\Entity(repositoryClass: RoleModulePermissionRepository::class)]
-#[ORM\Table(name: 'role_module_permission')]
+#[ORM\Table(name: 'app_role_module_permission', options: ['comment' => 'Permisos de acceso de un rol a un módulo del sistema'])]
 #[ORM\UniqueConstraint(name: 'unique_role_module', columns: ['role_id', 'app_module_id'])]
 class RoleModulePermission
 {

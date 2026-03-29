@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Controller;
 
 use App\DTO\Request\RegisterRequest;
+use App\DTO\Response\UserResponse;
+use App\Entity\User;
 use App\Service\AuthService;
 use Nelmio\ApiDocBundle\Attribute\Model;
 use OpenApi\Attributes as OA;
@@ -39,6 +41,18 @@ final class AuthController extends AbstractController
         $user = $this->authService->register($request);
 
         return $this->json($user, Response::HTTP_CREATED);
+    }
+
+    #[Route('/me', methods: ['GET'])]
+    #[OA\Get(summary: 'Obtener el usuario autenticado')]
+    #[OA\Response(response: 200, description: 'Usuario autenticado')]
+    #[OA\Response(response: 401, description: 'No autenticado')]
+    public function me(): JsonResponse
+    {
+        /** @var User $user */
+        $user = $this->getUser();
+
+        return $this->json(new UserResponse($user));
     }
 
     #[Route('/login', methods: ['POST'])]

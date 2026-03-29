@@ -16,6 +16,7 @@ use App\Pagination\PaginatedResponse;
 use App\Pagination\PaginationRequest;
 use App\Pagination\Paginator;
 use App\Repository\ActionCatalogRepository;
+use App\Repository\AppFunctionRepository;
 use App\Repository\AppModuleRepository;
 use App\Repository\RoleRepository;
 use Doctrine\ORM\EntityManagerInterface;
@@ -27,6 +28,7 @@ final readonly class RoleService
         private EntityManagerInterface $em,
         private RoleRepository $roleRepository,
         private AppModuleRepository $appModuleRepository,
+        private AppFunctionRepository $appFunctionRepository,
         private ActionCatalogRepository $actionCatalogRepository,
         private Paginator $paginator,
     ) {
@@ -55,7 +57,7 @@ final readonly class RoleService
         if ($role === null) {
             throw new NotFoundHttpException(sprintf('Rol con ID %d no encontrado.', $id));
         }
-        return new RoleDetailResponse($role);
+        return new RoleDetailResponse($role, $this->appFunctionRepository);
     }
 
     public function create(CreateRoleRequest $request): RoleResponse
@@ -123,17 +125,24 @@ final readonly class RoleService
             $mp->setCanAccess($perm['canAccess']);
             $this->em->persist($mp);
 
-            if (isset($perm['actions']) && is_array($perm['actions'])) {
-                foreach ($perm['actions'] as $actionCode => $allowed) {
-                    $action = $this->actionCatalogRepository->findOneBy(['code' => $actionCode]);
-                    if ($action === null) continue;
+            // Function-level action permissions
+            if (isset($perm['functions']) && is_array($perm['functions'])) {
+                foreach ($perm['functions'] as $fnPerm) {
+                    $fn = $this->appFunctionRepository->findOneBy(['code' => $fnPerm['functionCode']]);
+                    if ($fn === null) continue;
 
-                    $ap = new RoleActionPermission();
-                    $ap->setRole($role);
-                    $ap->setAppModule($module);
-                    $ap->setAction($action);
-                    $ap->setAllowed((bool) $allowed);
-                    $this->em->persist($ap);
+                    foreach ($fnPerm['actions'] as $actionCode => $allowed) {
+                        if (!$allowed) continue;
+                        $action = $this->actionCatalogRepository->findOneBy(['code' => $actionCode]);
+                        if ($action === null) continue;
+
+                        $ap = new RoleActionPermission();
+                        $ap->setRole($role);
+                        $ap->setAppFunction($fn);
+                        $ap->setAction($action);
+                        $ap->setAllowed(true);
+                        $this->em->persist($ap);
+                    }
                 }
             }
         }
@@ -141,14 +150,24 @@ final readonly class RoleService
         $this->em->flush();
         $this->em->refresh($role);
 
-        return new RoleDetailResponse($role);
+        return new RoleDetailResponse($role, $this->appFunctionRepository);
     }
 
-    /** @return array<int, array{code: string, name: string}> */
+    /** @return array<int, array{code: string, name: string, functions: array}> */
     public function getAllModules(): array
     {
         $modules = $this->appModuleRepository->findAllActive();
-        return array_map(static fn ($m) => ['code' => $m->getCode(), 'name' => $m->getName()], $modules);
+        return array_map(function ($m) {
+            $functions = $this->appFunctionRepository->findByModuleId($m->getId());
+            return [
+                'code' => $m->getCode(),
+                'name' => $m->getName(),
+                'functions' => array_map(
+                    static fn ($f) => ['code' => $f->getCode(), 'name' => $f->getName()],
+                    $functions,
+                ),
+            ];
+        }, $modules);
     }
 
     /** @return array<int, array{code: string, name: string}> */

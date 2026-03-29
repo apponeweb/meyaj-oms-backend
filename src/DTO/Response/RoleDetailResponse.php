@@ -7,6 +7,7 @@ namespace App\DTO\Response;
 use App\Entity\Role;
 use App\Entity\RoleActionPermission;
 use App\Entity\RoleModulePermission;
+use App\Repository\AppFunctionRepository;
 
 final readonly class RoleDetailResponse
 {
@@ -14,11 +15,10 @@ final readonly class RoleDetailResponse
     public string $name;
     public ?string $description;
     public bool $active;
-    /** @var array<int, array{moduleCode: string, moduleName: string, canAccess: bool, actions: array<string, bool>}> */
     public array $permissions;
     public string $createdAt;
 
-    public function __construct(Role $role)
+    public function __construct(Role $role, AppFunctionRepository $appFunctionRepository)
     {
         $this->id = $role->getId();
         $this->name = $role->getName();
@@ -26,24 +26,35 @@ final readonly class RoleDetailResponse
         $this->active = $role->isActive();
         $this->createdAt = $role->getCreatedAt()->format(\DateTimeInterface::ATOM);
 
+        // Index action permissions by function_id -> action_code
+        $actionMap = [];
+        /** @var RoleActionPermission $ap */
+        foreach ($role->getActionPermissions() as $ap) {
+            $fnId = $ap->getAppFunction()->getId();
+            $actionMap[$fnId][$ap->getAction()->getCode()] = $ap->isAllowed();
+        }
+
         $perms = [];
         /** @var RoleModulePermission $mp */
         foreach ($role->getModulePermissions() as $mp) {
             $module = $mp->getAppModule();
-            $actionPerms = [];
+            $functions = $appFunctionRepository->findByModuleId($module->getId());
 
-            /** @var RoleActionPermission $ap */
-            foreach ($role->getActionPermissions() as $ap) {
-                if ($ap->getAppModule()->getId() === $module->getId()) {
-                    $actionPerms[$ap->getAction()->getCode()] = $ap->isAllowed();
-                }
+            $fnPerms = [];
+            foreach ($functions as $fn) {
+                $fnActions = $actionMap[$fn->getId()] ?? [];
+                $fnPerms[] = [
+                    'functionCode' => $fn->getCode(),
+                    'functionName' => $fn->getName(),
+                    'actions' => $fnActions,
+                ];
             }
 
             $perms[] = [
                 'moduleCode' => $module->getCode(),
                 'moduleName' => $module->getName(),
                 'canAccess' => $mp->canAccess(),
-                'actions' => $actionPerms,
+                'functions' => $fnPerms,
             ];
         }
 
