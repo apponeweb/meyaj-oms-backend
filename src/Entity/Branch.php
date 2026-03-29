@@ -32,11 +32,14 @@ class Branch
     #[ORM\Column(length: 20, nullable: true)]
     private ?string $code = null;
 
-    #[ORM\Column(type: 'text', nullable: true)]
-    private ?string $address = null;
+    #[ORM\Column(type: 'json', nullable: true)]
+    private ?array $address = null;
 
     #[ORM\Column(length: 20, nullable: true)]
     private ?string $phone = null;
+
+    #[ORM\Column(type: 'text', nullable: true)]
+    private ?string $image = null;
 
     #[ORM\Column]
     private bool $active = true;
@@ -69,11 +72,14 @@ class Branch
     public function getCode(): ?string { return $this->code; }
     public function setCode(?string $code): static { $this->code = $code; return $this; }
 
-    public function getAddress(): ?string { return $this->address; }
-    public function setAddress(?string $address): static { $this->address = $address; return $this; }
+    public function getAddress(): ?array { return $this->address; }
+    public function setAddress(?array $address): static { $this->address = $address; return $this; }
 
     public function getPhone(): ?string { return $this->phone; }
     public function setPhone(?string $phone): static { $this->phone = $phone; return $this; }
+
+    public function getImage(): ?string { return $this->image; }
+    public function setImage(?string $image): static { $this->image = $image; return $this; }
 
     public function isActive(): bool { return $this->active; }
     public function setActive(bool $active): static { $this->active = $active; return $this; }

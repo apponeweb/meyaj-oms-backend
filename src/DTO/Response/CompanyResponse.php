@@ -12,9 +12,11 @@ final readonly class CompanyResponse
     public string $name;
     public ?string $tradeName;
     public ?string $taxId;
-    public ?string $address;
+    public ?array $address;
     public ?string $phone;
     public ?string $email;
+    public ?string $image;
+    public ?array $socialNetworks;
     public bool $active;
     public string $createdAt;
     public string $updatedAt;
@@ -28,6 +30,8 @@ final readonly class CompanyResponse
         $this->address = $company->getAddress();
         $this->phone = $company->getPhone();
         $this->email = $company->getEmail();
+        $this->image = $company->getImage();
+        $this->socialNetworks = $company->getSocialNetworks();
         $this->active = $company->isActive();
         $this->createdAt = $company->getCreatedAt()->format(\DateTimeInterface::ATOM);
         $this->updatedAt = $company->getUpdatedAt()->format(\DateTimeInterface::ATOM);

@@ -4,217 +4,100 @@ declare(strict_types=1);
 
 namespace App\Controller;
 
-use App\Entity\Customer;
-use App\Repository\CustomerRepository;
-use Doctrine\ORM\EntityManagerInterface;
+use App\DTO\Request\CreateCustomerRequest;
+use App\DTO\Request\UpdateCustomerRequest;
+use App\Pagination\PaginationRequest;
+use App\Service\CustomerService;
+use Nelmio\ApiDocBundle\Attribute\Model;
+use OpenApi\Attributes as OA;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
-use Symfony\Component\Routing\Annotation\Route;
-use Symfony\Component\Validator\Validator\ValidatorInterface;
+use Symfony\Component\HttpFoundation\Response;
+use Symfony\Component\HttpKernel\Attribute\MapQueryString;
+use Symfony\Component\HttpKernel\Attribute\MapRequestPayload;
+use Symfony\Component\Routing\Attribute\Route;
 
 #[Route('/api/customers')]
-class CustomerController extends AbstractController
+#[OA\Tag(name: 'Clientes')]
+final class CustomerController extends AbstractController
 {
-    private CustomerRepository $customerRepository;
-    private EntityManagerInterface $entityManager;
-    private ValidatorInterface $validator;
-
     public function __construct(
-        CustomerRepository $customerRepository,
-        EntityManagerInterface $entityManager,
-        ValidatorInterface $validator
+        private readonly CustomerService $customerService,
     ) {
-        $this->customerRepository = $customerRepository;
-        $this->entityManager = $entityManager;
-        $this->validator = $validator;
     }
 
     #[Route('', methods: ['GET'])]
-    public function index(Request $request): JsonResponse
-    {
-        $page = (int) $request->query->get('page', 1);
-        $limit = (int) $request->query->get('limit', 20);
-        $search = $request->query->get('search', '');
-
-        $offset = ($page - 1) * $limit;
-
-        if ($search) {
-            $customers = $this->customerRepository->findByNameOrPhone($search);
-        } else {
-            $customers = $this->customerRepository->findActiveCustomers();
-        }
-
-        $total = count($customers);
-        $customers = array_slice($customers, $offset, $limit);
-
-        $data = array_map(function (Customer $customer) {
-            return [
-                'id' => $customer->getId(),
-                'name' => $customer->getName(),
-                'email' => $customer->getEmail(),
-                'phone' => $customer->getPhone(),
-                'address' => $customer->getAddress(),
-                'taxId' => $customer->getTaxId(),
-                'createdAt' => $customer->getCreatedAt()->format('Y-m-d H:i:s'),
-                'updatedAt' => $customer->getUpdatedAt()->format('Y-m-d H:i:s'),
-            ];
-        }, $customers);
-
-        return $this->json([
-            'data' => $data,
-            'meta' => [
-                'currentPage' => $page,
-                'lastPage' => ceil($total / $limit),
-                'perPage' => $limit,
-                'total' => $total,
-            ],
-        ]);
+    #[OA\Get(summary: 'Listar clientes con paginación')]
+    #[OA\Response(response: 200, description: 'Lista paginada de clientes')]
+    public function index(
+        #[MapQueryString] ?PaginationRequest $pagination = null,
+    ): JsonResponse {
+        $pagination ??= new PaginationRequest();
+        return $this->json($this->customerService->list($pagination));
     }
 
     #[Route('/search', methods: ['GET'])]
+    #[OA\Get(summary: 'Buscar clientes por nombre o teléfono')]
+    #[OA\Parameter(name: 'q', in: 'query', schema: new OA\Schema(type: 'string'))]
+    #[OA\Response(response: 200, description: 'Resultados de búsqueda')]
     public function search(Request $request): JsonResponse
     {
         $query = $request->query->get('q', '');
-        
+
         if (strlen($query) < 2) {
             return $this->json(['data' => []]);
         }
 
-        $customers = $this->customerRepository->findByNameOrPhone($query);
+        return $this->json(['data' => $this->customerService->search($query)]);
+    }
 
-        $data = array_map(function (Customer $customer) {
-            return [
-                'id' => $customer->getId(),
-                'name' => $customer->getName(),
-                'email' => $customer->getEmail(),
-                'phone' => $customer->getPhone(),
-                'displayText' => $customer->getName() . ($customer->getPhone() ? ' - ' . $customer->getPhone() : ''),
-            ];
-        }, $customers);
-
-        return $this->json(['data' => $data]);
+    #[Route('/{id}', methods: ['GET'], requirements: ['id' => '\d+'])]
+    #[OA\Get(summary: 'Obtener un cliente por ID')]
+    #[OA\Response(response: 200, description: 'Cliente encontrado')]
+    #[OA\Response(response: 404, description: 'Cliente no encontrado')]
+    public function show(int $id): JsonResponse
+    {
+        return $this->json($this->customerService->show($id));
     }
 
     #[Route('', methods: ['POST'])]
-    public function create(Request $request): JsonResponse
-    {
-        $data = json_decode($request->getContent(), true);
-
-        if (!$data) {
-            return $this->json(['error' => 'Invalid JSON'], 400);
-        }
-
-        $customer = new Customer();
-        $customer->setName($data['name']);
-        $customer->setEmail($data['email'] ?? null);
-        $customer->setPhone($data['phone'] ?? null);
-        $customer->setAddress($data['address'] ?? null);
-        $customer->setTaxId($data['taxId'] ?? null);
-
-        $errors = $this->validator->validate($customer);
-        if (count($errors) > 0) {
-            return $this->json(['errors' => (string) $errors], 400);
-        }
-
-        $this->entityManager->persist($customer);
-        $this->entityManager->flush();
-
-        return $this->json([
-            'id' => $customer->getId(),
-            'name' => $customer->getName(),
-            'email' => $customer->getEmail(),
-            'phone' => $customer->getPhone(),
-            'address' => $customer->getAddress(),
-            'taxId' => $customer->getTaxId(),
-            'createdAt' => $customer->getCreatedAt()->format('Y-m-d H:i:s'),
-            'updatedAt' => $customer->getUpdatedAt()->format('Y-m-d H:i:s'),
-        ], 201);
+    #[OA\Post(
+        summary: 'Crear un nuevo cliente',
+        requestBody: new OA\RequestBody(
+            content: new OA\JsonContent(ref: new Model(type: CreateCustomerRequest::class)),
+        ),
+    )]
+    #[OA\Response(response: 201, description: 'Cliente creado exitosamente')]
+    public function create(
+        #[MapRequestPayload] CreateCustomerRequest $request,
+    ): JsonResponse {
+        return $this->json($this->customerService->create($request), Response::HTTP_CREATED);
     }
 
-    #[Route('/{id}', methods: ['GET'])]
-    public function show(int $id): JsonResponse
-    {
-        $customer = $this->customerRepository->find($id);
-
-        if (!$customer) {
-            return $this->json(['error' => 'Customer not found'], 404);
-        }
-
-        return $this->json([
-            'id' => $customer->getId(),
-            'name' => $customer->getName(),
-            'email' => $customer->getEmail(),
-            'phone' => $customer->getPhone(),
-            'address' => $customer->getAddress(),
-            'taxId' => $customer->getTaxId(),
-            'createdAt' => $customer->getCreatedAt()->format('Y-m-d H:i:s'),
-            'updatedAt' => $customer->getUpdatedAt()->format('Y-m-d H:i:s'),
-        ]);
+    #[Route('/{id}', methods: ['PUT'], requirements: ['id' => '\d+'])]
+    #[OA\Put(
+        summary: 'Actualizar un cliente',
+        requestBody: new OA\RequestBody(
+            content: new OA\JsonContent(ref: new Model(type: UpdateCustomerRequest::class)),
+        ),
+    )]
+    #[OA\Response(response: 200, description: 'Cliente actualizado')]
+    #[OA\Response(response: 404, description: 'Cliente no encontrado')]
+    public function update(
+        int $id,
+        #[MapRequestPayload] UpdateCustomerRequest $request,
+    ): JsonResponse {
+        return $this->json($this->customerService->update($id, $request));
     }
 
-    #[Route('/{id}', methods: ['PUT'])]
-    public function update(int $id, Request $request): JsonResponse
-    {
-        $customer = $this->customerRepository->find($id);
-
-        if (!$customer) {
-            return $this->json(['error' => 'Customer not found'], 404);
-        }
-
-        $data = json_decode($request->getContent(), true);
-
-        if (!$data) {
-            return $this->json(['error' => 'Invalid JSON'], 400);
-        }
-
-        if (isset($data['name'])) {
-            $customer->setName($data['name']);
-        }
-        if (isset($data['email'])) {
-            $customer->setEmail($data['email']);
-        }
-        if (isset($data['phone'])) {
-            $customer->setPhone($data['phone']);
-        }
-        if (isset($data['address'])) {
-            $customer->setAddress($data['address']);
-        }
-        if (isset($data['taxId'])) {
-            $customer->setTaxId($data['taxId']);
-        }
-
-        $errors = $this->validator->validate($customer);
-        if (count($errors) > 0) {
-            return $this->json(['errors' => (string) $errors], 400);
-        }
-
-        $this->entityManager->flush();
-
-        return $this->json([
-            'id' => $customer->getId(),
-            'name' => $customer->getName(),
-            'email' => $customer->getEmail(),
-            'phone' => $customer->getPhone(),
-            'address' => $customer->getAddress(),
-            'taxId' => $customer->getTaxId(),
-            'createdAt' => $customer->getCreatedAt()->format('Y-m-d H:i:s'),
-            'updatedAt' => $customer->getUpdatedAt()->format('Y-m-d H:i:s'),
-        ]);
-    }
-
-    #[Route('/{id}', methods: ['DELETE'])]
+    #[Route('/{id}', methods: ['DELETE'], requirements: ['id' => '\d+'])]
+    #[OA\Delete(summary: 'Eliminar un cliente (soft delete)')]
+    #[OA\Response(response: 204, description: 'Cliente eliminado')]
+    #[OA\Response(response: 404, description: 'Cliente no encontrado')]
     public function delete(int $id): JsonResponse
     {
-        $customer = $this->customerRepository->find($id);
-
-        if (!$customer) {
-            return $this->json(['error' => 'Customer not found'], 404);
-        }
-
-        $customer->setActive(false);
-        $this->entityManager->flush();
-
-        return $this->json(null, 204);
+        $this->customerService->delete($id);
+        return $this->json(null, Response::HTTP_NO_CONTENT);
     }
 }

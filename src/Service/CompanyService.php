@@ -59,6 +59,8 @@ final readonly class CompanyService
         $company->setAddress($request->address);
         $company->setPhone($request->phone);
         $company->setEmail($request->email);
+        $company->setImage($request->image !== "" ? $request->image : null);
+        $company->setSocialNetworks($request->socialNetworks);
 
         $this->em->persist($company);
         $this->em->flush();
@@ -79,6 +81,8 @@ final readonly class CompanyService
         if ($request->address !== null) $company->setAddress($request->address);
         if ($request->phone !== null) $company->setPhone($request->phone);
         if ($request->email !== null) $company->setEmail($request->email);
+        if ($request->image !== null) $company->setImage($request->image !== "" ? $request->image : null);
+        if ($request->socialNetworks !== null) $company->setSocialNetworks($request->socialNetworks);
         if ($request->active !== null) $company->setActive($request->active);
 
         $this->em->flush();

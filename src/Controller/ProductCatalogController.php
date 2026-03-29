@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Controller;
 
+use App\DTO\Request\CreateProductCatalogRequest;
+use App\DTO\Request\UpdateProductCatalogRequest;
 use App\Entity\FabricType;
 use App\Entity\GarmentType;
 use App\Entity\GenderCatalog;
@@ -13,12 +15,13 @@ use App\Entity\SeasonCatalog;
 use App\Entity\SizeProfile;
 use App\Pagination\PaginationRequest;
 use App\Service\ProductCatalogService;
+use Nelmio\ApiDocBundle\Attribute\Model;
 use OpenApi\Attributes as OA;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
-use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpKernel\Attribute\MapQueryString;
+use Symfony\Component\HttpKernel\Attribute\MapRequestPayload;
 use Symfony\Component\Routing\Attribute\Route;
 
 #[Route('/api/productos/catalogs')]
@@ -37,7 +40,8 @@ final class ProductCatalogController extends AbstractController
 
     public function __construct(
         private readonly ProductCatalogService $service,
-    ) {}
+    ) {
+    }
 
     #[Route('/{type}', methods: ['GET'], requirements: ['type' => 'labels|qualities|seasons|genders|garment-types|fabric-types|size-profiles'])]
     #[OA\Get(summary: 'Listar registros de un catálogo de producto')]
@@ -54,29 +58,50 @@ final class ProductCatalogController extends AbstractController
     }
 
     #[Route('/{type}', methods: ['POST'], requirements: ['type' => 'labels|qualities|seasons|genders|garment-types|fabric-types|size-profiles'])]
-    #[OA\Post(summary: 'Crear registro de catálogo')]
-    public function create(string $type, Request $request): JsonResponse
-    {
-        $data = json_decode($request->getContent(), true);
+    #[OA\Post(
+        summary: 'Crear registro de catálogo',
+        requestBody: new OA\RequestBody(
+            content: new OA\JsonContent(ref: new Model(type: CreateProductCatalogRequest::class)),
+        ),
+    )]
+    #[OA\Response(response: 201, description: 'Registro creado exitosamente')]
+    public function create(
+        string $type,
+        #[MapRequestPayload] CreateProductCatalogRequest $request,
+    ): JsonResponse {
         return $this->json(
-            $this->service->create(self::CATALOG_MAP[$type], $data['name'] ?? '', $data['description'] ?? null),
+            $this->service->create(self::CATALOG_MAP[$type], $request->name, $request->description),
             Response::HTTP_CREATED,
         );
     }
 
     #[Route('/{type}/{id}', methods: ['PUT'], requirements: ['type' => 'labels|qualities|seasons|genders|garment-types|fabric-types|size-profiles', 'id' => '\d+'])]
-    #[OA\Put(summary: 'Actualizar registro de catálogo')]
-    public function update(string $type, int $id, Request $request): JsonResponse
-    {
-        $data = json_decode($request->getContent(), true);
+    #[OA\Put(
+        summary: 'Actualizar registro de catálogo',
+        requestBody: new OA\RequestBody(
+            content: new OA\JsonContent(ref: new Model(type: UpdateProductCatalogRequest::class)),
+        ),
+    )]
+    #[OA\Response(response: 200, description: 'Registro actualizado')]
+    #[OA\Response(response: 404, description: 'Registro no encontrado')]
+    public function update(
+        string $type,
+        int $id,
+        #[MapRequestPayload] UpdateProductCatalogRequest $request,
+    ): JsonResponse {
         return $this->json($this->service->update(
-            self::CATALOG_MAP[$type], $id,
-            $data['name'] ?? null, $data['description'] ?? null, $data['active'] ?? null,
+            self::CATALOG_MAP[$type],
+            $id,
+            $request->name,
+            $request->description,
+            $request->active,
         ));
     }
 
     #[Route('/{type}/{id}', methods: ['DELETE'], requirements: ['type' => 'labels|qualities|seasons|genders|garment-types|fabric-types|size-profiles', 'id' => '\d+'])]
     #[OA\Delete(summary: 'Eliminar registro de catálogo')]
+    #[OA\Response(response: 204, description: 'Registro eliminado')]
+    #[OA\Response(response: 404, description: 'Registro no encontrado')]
     public function delete(string $type, int $id): JsonResponse
     {
         $this->service->delete(self::CATALOG_MAP[$type], $id);

@@ -18,8 +18,9 @@ final readonly class CreateBranchRequest
         public string $name,
 
         public ?string $code = null,
-        public ?string $address = null,
+        public ?array $address = null,
         public ?string $phone = null,
+        public ?string $image = null,
     ) {
     }
 }

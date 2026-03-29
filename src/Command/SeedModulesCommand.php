@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Command;
 
 use App\Entity\ActionCatalog;
+use App\Entity\AppFunction;
 use App\Entity\AppModule;
 use App\Entity\Role;
 use App\Entity\RoleActionPermission;
@@ -18,10 +19,66 @@ use Symfony\Component\Console\Style\SymfonyStyle;
 
 #[AsCommand(
     name: 'app:seed-modules',
-    description: 'Seed modules, actions, and default admin role with full permissions',
+    description: 'Seed modules, functions, actions, and default roles with permissions',
 )]
 class SeedModulesCommand extends Command
 {
+    private const READ_ONLY_FUNCTIONS = ['modules_mgmt', 'functions_mgmt', 'actions_mgmt'];
+
+    private const MODULES = [
+        ['code' => 'catalogos', 'name' => 'Catálogos', 'icon' => 'Building2', 'order' => 1],
+        ['code' => 'seguridad', 'name' => 'Seguridad', 'icon' => 'Shield', 'order' => 2],
+        ['code' => 'proveedor', 'name' => 'Proveedores', 'icon' => 'Truck', 'order' => 3],
+        ['code' => 'productos', 'name' => 'Productos', 'icon' => 'Package', 'order' => 4],
+        ['code' => 'ventas', 'name' => 'Ventas', 'icon' => 'ShoppingCart', 'order' => 5],
+        ['code' => 'reportes', 'name' => 'Reportes', 'icon' => 'BarChart3', 'order' => 6],
+    ];
+
+    private const FUNCTIONS = [
+        // Catálogos
+        ['module' => 'catalogos', 'code' => 'companies', 'name' => 'Empresas', 'order' => 1],
+        ['module' => 'catalogos', 'code' => 'branches', 'name' => 'Sucursales', 'order' => 2],
+        ['module' => 'catalogos', 'code' => 'departments', 'name' => 'Departamentos', 'order' => 3],
+        // Seguridad - Control de acceso
+        ['module' => 'seguridad', 'code' => 'roles', 'name' => 'Roles', 'order' => 1],
+        ['module' => 'seguridad', 'code' => 'permissions', 'name' => 'Permisos', 'order' => 2],
+        ['module' => 'seguridad', 'code' => 'users', 'name' => 'Usuarios', 'order' => 3],
+        ['module' => 'seguridad', 'code' => 'sessions', 'name' => 'Sesiones', 'order' => 4],
+        // Seguridad - Configuración (read-only)
+        ['module' => 'seguridad', 'code' => 'modules_mgmt', 'name' => 'Módulos', 'order' => 5],
+        ['module' => 'seguridad', 'code' => 'functions_mgmt', 'name' => 'Funcionalidades', 'order' => 6],
+        ['module' => 'seguridad', 'code' => 'actions_mgmt', 'name' => 'Acciones', 'order' => 7],
+        // Proveedores
+        ['module' => 'proveedor', 'code' => 'suppliers', 'name' => 'Proveedores', 'order' => 1],
+        ['module' => 'proveedor', 'code' => 'brands', 'name' => 'Marcas', 'order' => 2],
+        // Productos - Inventario
+        ['module' => 'productos', 'code' => 'pacas', 'name' => 'Pacas', 'order' => 1],
+        // Productos - Catálogos
+        ['module' => 'productos', 'code' => 'labels', 'name' => 'Etiquetas', 'order' => 2],
+        ['module' => 'productos', 'code' => 'qualities', 'name' => 'Calidades', 'order' => 3],
+        ['module' => 'productos', 'code' => 'seasons', 'name' => 'Temporadas', 'order' => 4],
+        ['module' => 'productos', 'code' => 'genders', 'name' => 'Género', 'order' => 5],
+        ['module' => 'productos', 'code' => 'garment_types', 'name' => 'Tipos de prenda', 'order' => 6],
+        ['module' => 'productos', 'code' => 'fabric_types', 'name' => 'Tipos de tela', 'order' => 7],
+        ['module' => 'productos', 'code' => 'size_profiles', 'name' => 'Perfiles de talla', 'order' => 8],
+        // Ventas
+        ['module' => 'ventas', 'code' => 'pos', 'name' => 'Punto de venta', 'order' => 1],
+        ['module' => 'ventas', 'code' => 'sales', 'name' => 'Historial de ventas', 'order' => 2],
+        ['module' => 'ventas', 'code' => 'customers', 'name' => 'Clientes', 'order' => 3],
+        // Reportes
+        ['module' => 'reportes', 'code' => 'dashboard', 'name' => 'Dashboard', 'order' => 1],
+        ['module' => 'reportes', 'code' => 'daily_reports', 'name' => 'Reportes diarios', 'order' => 2],
+        ['module' => 'reportes', 'code' => 'monthly_reports', 'name' => 'Reportes mensuales', 'order' => 3],
+    ];
+
+    private const ACTIONS = [
+        ['code' => 'create', 'name' => 'Crear'],
+        ['code' => 'read', 'name' => 'Leer'],
+        ['code' => 'update', 'name' => 'Actualizar'],
+        ['code' => 'delete', 'name' => 'Eliminar'],
+        ['code' => 'export', 'name' => 'Exportar'],
+    ];
+
     public function __construct(
         private readonly EntityManagerInterface $em,
     ) {
@@ -32,20 +89,27 @@ class SeedModulesCommand extends Command
     {
         $io = new SymfonyStyle($input, $output);
 
-        // Seed modules
-        $modulesData = [
-            ['code' => 'catalogos', 'name' => 'Catálogos', 'icon' => 'Building2', 'order' => 1],
-            ['code' => 'seguridad', 'name' => 'Seguridad', 'icon' => 'Shield', 'order' => 2],
-            ['code' => 'proveedor', 'name' => 'Proveedores', 'icon' => 'Truck', 'order' => 3],
-            ['code' => 'productos', 'name' => 'Productos', 'icon' => 'Package', 'order' => 4],
-            ['code' => 'ventas', 'name' => 'Ventas', 'icon' => 'ShoppingCart', 'order' => 5],
-            ['code' => 'reportes', 'name' => 'Reportes', 'icon' => 'BarChart3', 'order' => 6],
-        ];
+        $modules = $this->seedModules($io);
+        $actions = $this->seedActions($io);
+        $functions = $this->seedFunctions($io, $modules);
 
+        $this->em->flush();
+
+        $this->seedAdminRole($io, $modules, $functions, $actions);
+        $this->seedVendedorRole($io, $modules, $functions, $actions);
+
+        $this->em->flush();
+        $io->success('Modules, functions, actions, and roles seeded successfully.');
+
+        return Command::SUCCESS;
+    }
+
+    private function seedModules(SymfonyStyle $io): array
+    {
         $moduleRepo = $this->em->getRepository(AppModule::class);
         $modules = [];
 
-        foreach ($modulesData as $data) {
+        foreach (self::MODULES as $data) {
             $existing = $moduleRepo->findOneBy(['code' => $data['code']]);
             if ($existing) {
                 $modules[$data['code']] = $existing;
@@ -64,19 +128,15 @@ class SeedModulesCommand extends Command
             $io->info("Created module: {$data['name']}");
         }
 
-        // Seed actions
-        $actionsData = [
-            ['code' => 'create', 'name' => 'Crear'],
-            ['code' => 'read', 'name' => 'Leer'],
-            ['code' => 'update', 'name' => 'Actualizar'],
-            ['code' => 'delete', 'name' => 'Eliminar'],
-            ['code' => 'export', 'name' => 'Exportar'],
-        ];
+        return $modules;
+    }
 
+    private function seedActions(SymfonyStyle $io): array
+    {
         $actionRepo = $this->em->getRepository(ActionCatalog::class);
         $actions = [];
 
-        foreach ($actionsData as $data) {
+        foreach (self::ACTIONS as $data) {
             $existing = $actionRepo->findOneBy(['code' => $data['code']]);
             if ($existing) {
                 $actions[$data['code']] = $existing;
@@ -91,7 +151,38 @@ class SeedModulesCommand extends Command
             $io->info("Created action: {$data['name']}");
         }
 
-        // Seed default admin role
+        return $actions;
+    }
+
+    private function seedFunctions(SymfonyStyle $io, array $modules): array
+    {
+        $fnRepo = $this->em->getRepository(AppFunction::class);
+        $functions = [];
+
+        foreach (self::FUNCTIONS as $data) {
+            $existing = $fnRepo->findOneBy(['code' => $data['code']]);
+            if ($existing) {
+                $functions[$data['code']] = $existing;
+                $io->note("Function '{$data['code']}' already exists, skipping.");
+                continue;
+            }
+
+            $fn = new AppFunction();
+            $fn->setAppModule($modules[$data['module']]);
+            $fn->setCode($data['code']);
+            $fn->setName($data['name']);
+            $fn->setDisplayOrder($data['order']);
+            $fn->setActive(true);
+            $this->em->persist($fn);
+            $functions[$data['code']] = $fn;
+            $io->info("Created function: {$data['name']}");
+        }
+
+        return $functions;
+    }
+
+    private function seedAdminRole(SymfonyStyle $io, array $modules, array $functions, array $actions): void
+    {
         $roleRepo = $this->em->getRepository(Role::class);
         $adminRole = $roleRepo->findOneBy(['name' => 'Administrador']);
 
@@ -101,18 +192,15 @@ class SeedModulesCommand extends Command
             $adminRole->setDescription('Acceso total a todos los módulos del sistema');
             $adminRole->setActive(true);
             $this->em->persist($adminRole);
+            $this->em->flush();
             $io->info('Created role: Administrador');
         }
 
-        // Flush to get IDs
-        $this->em->flush();
-
-        // Create module permissions and action permissions for admin role
         $rmpRepo = $this->em->getRepository(RoleModulePermission::class);
         $rapRepo = $this->em->getRepository(RoleActionPermission::class);
 
+        // Module access
         foreach ($modules as $module) {
-            // Module access
             $existingRmp = $rmpRepo->findOneBy(['role' => $adminRole, 'appModule' => $module]);
             if (!$existingRmp) {
                 $rmp = new RoleModulePermission();
@@ -121,66 +209,83 @@ class SeedModulesCommand extends Command
                 $rmp->setCanAccess(true);
                 $this->em->persist($rmp);
             }
+        }
 
-            // Action permissions
-            foreach ($actions as $action) {
-                $existingRap = $rapRepo->findOneBy([
+        // Function-level action permissions
+        foreach ($functions as $fnCode => $fn) {
+            $isReadOnly = in_array($fnCode, self::READ_ONLY_FUNCTIONS, true);
+            $allowedActions = $isReadOnly ? ['read'] : array_keys($actions);
+
+            foreach ($allowedActions as $actionCode) {
+                $action = $actions[$actionCode];
+                $existing = $rapRepo->findOneBy([
                     'role' => $adminRole,
-                    'appModule' => $module,
+                    'appFunction' => $fn,
                     'action' => $action,
                 ]);
-                if (!$existingRap) {
+                if (!$existing) {
                     $rap = new RoleActionPermission();
                     $rap->setRole($adminRole);
-                    $rap->setAppModule($module);
+                    $rap->setAppFunction($fn);
                     $rap->setAction($action);
                     $rap->setAllowed(true);
                     $this->em->persist($rap);
                 }
             }
         }
+    }
 
-        // Also create a "Vendedor" role with limited access
+    private function seedVendedorRole(SymfonyStyle $io, array $modules, array $functions, array $actions): void
+    {
+        $roleRepo = $this->em->getRepository(Role::class);
         $vendedorRole = $roleRepo->findOneBy(['name' => 'Vendedor']);
-        if (!$vendedorRole) {
-            $vendedorRole = new Role();
-            $vendedorRole->setName('Vendedor');
-            $vendedorRole->setDescription('Acceso a ventas y reportes');
-            $vendedorRole->setActive(true);
-            $this->em->persist($vendedorRole);
-            $io->info('Created role: Vendedor');
 
-            $this->em->flush();
-
-            // Vendedor: access to ventas and reportes only
-            foreach (['ventas', 'reportes'] as $code) {
-                $module = $modules[$code];
-
-                $rmp = new RoleModulePermission();
-                $rmp->setRole($vendedorRole);
-                $rmp->setAppModule($module);
-                $rmp->setCanAccess(true);
-                $this->em->persist($rmp);
-
-                $vendedorActions = $code === 'ventas'
-                    ? ['create', 'read', 'update']
-                    : ['read', 'export'];
-
-                foreach ($vendedorActions as $actionCode) {
-                    $rap = new RoleActionPermission();
-                    $rap->setRole($vendedorRole);
-                    $rap->setAppModule($module);
-                    $rap->setAction($actions[$actionCode]);
-                    $rap->setAllowed(true);
-                    $this->em->persist($rap);
-                }
-            }
+        if ($vendedorRole) {
+            return;
         }
 
+        $vendedorRole = new Role();
+        $vendedorRole->setName('Vendedor');
+        $vendedorRole->setDescription('Acceso a ventas y reportes');
+        $vendedorRole->setActive(true);
+        $this->em->persist($vendedorRole);
         $this->em->flush();
+        $io->info('Created role: Vendedor');
 
-        $io->success('Modules, actions, and roles seeded successfully.');
+        // Module access: ventas and reportes
+        foreach (['ventas', 'reportes'] as $code) {
+            $module = $modules[$code];
 
-        return Command::SUCCESS;
+            $rmp = new RoleModulePermission();
+            $rmp->setRole($vendedorRole);
+            $rmp->setAppModule($module);
+            $rmp->setCanAccess(true);
+            $this->em->persist($rmp);
+        }
+
+        // Vendedor function permissions
+        $vendedorFunctionActions = [
+            'pos' => ['create', 'read', 'update'],
+            'sales' => ['read'],
+            'customers' => ['create', 'read', 'update'],
+            'dashboard' => ['read'],
+            'daily_reports' => ['read', 'export'],
+            'monthly_reports' => ['read', 'export'],
+        ];
+
+        foreach ($vendedorFunctionActions as $fnCode => $allowedActions) {
+            if (!isset($functions[$fnCode])) continue;
+            $fn = $functions[$fnCode];
+
+            foreach ($allowedActions as $actionCode) {
+                if (!isset($actions[$actionCode])) continue;
+                $rap = new RoleActionPermission();
+                $rap->setRole($vendedorRole);
+                $rap->setAppFunction($fn);
+                $rap->setAction($actions[$actionCode]);
+                $rap->setAllowed(true);
+                $this->em->persist($rap);
+            }
+        }
     }
 }

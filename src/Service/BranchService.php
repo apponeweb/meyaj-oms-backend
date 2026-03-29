@@ -66,6 +66,7 @@ final readonly class BranchService
         $branch->setCode($request->code);
         $branch->setAddress($request->address);
         $branch->setPhone($request->phone);
+        $branch->setImage($request->image);
 
         $this->em->persist($branch);
         $this->em->flush();
@@ -84,6 +85,7 @@ final readonly class BranchService
         if ($request->code !== null) $branch->setCode($request->code);
         if ($request->address !== null) $branch->setAddress($request->address);
         if ($request->phone !== null) $branch->setPhone($request->phone);
+        if ($request->image !== null) $branch->setImage($request->image);
         if ($request->active !== null) $branch->setActive($request->active);
 
         $this->em->flush();

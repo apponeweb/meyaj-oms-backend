@@ -6,16 +6,14 @@ namespace App\DTO\Request;
 
 use Symfony\Component\Validator\Constraints as Assert;
 
-final readonly class UpdateBranchRequest
+final readonly class UpdateProductCatalogRequest
 {
     public function __construct(
-        #[Assert\Length(min: 2, max: 150)]
+        #[Assert\Length(min: 2, max: 100)]
         public ?string $name = null,
 
-        public ?string $code = null,
-        public ?array $address = null,
-        public ?string $phone = null,
-        public ?string $image = null,
+        public ?string $description = null,
+
         public ?bool $active = null,
     ) {
     }

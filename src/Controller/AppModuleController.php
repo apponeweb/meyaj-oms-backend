@@ -4,17 +4,17 @@ declare(strict_types=1);
 
 namespace App\Controller;
 
-use App\Entity\AppModule;
+use App\DTO\Request\CreateAppModuleRequest;
+use App\DTO\Request\UpdateAppModuleRequest;
 use App\Pagination\PaginationRequest;
-use App\Pagination\Paginator;
-use App\Repository\AppModuleRepository;
-use Doctrine\ORM\EntityManagerInterface;
+use App\Service\AppModuleService;
+use Nelmio\ApiDocBundle\Attribute\Model;
 use OpenApi\Attributes as OA;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
-use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpKernel\Attribute\MapQueryString;
+use Symfony\Component\HttpKernel\Attribute\MapRequestPayload;
 use Symfony\Component\Routing\Attribute\Route;
 
 #[Route('/api/seguridad/modules')]
@@ -22,85 +22,57 @@ use Symfony\Component\Routing\Attribute\Route;
 final class AppModuleController extends AbstractController
 {
     public function __construct(
-        private readonly AppModuleRepository $repo,
-        private readonly EntityManagerInterface $em,
-        private readonly Paginator $paginator,
-    ) {}
+        private readonly AppModuleService $appModuleService,
+    ) {
+    }
 
     #[Route('', methods: ['GET'])]
+    #[OA\Get(summary: 'Listar módulos con paginación')]
+    #[OA\Response(response: 200, description: 'Lista paginada de módulos')]
     public function index(
         #[MapQueryString] ?PaginationRequest $pagination = null,
     ): JsonResponse {
         $pagination ??= new PaginationRequest();
-
-        $qb = $this->repo->createQueryBuilder('m');
-
-        if ($pagination->search) {
-            $qb->andWhere('m.name LIKE :s OR m.code LIKE :s')->setParameter('s', "%{$pagination->search}%");
-        }
-
-        if ($pagination->sort === null) {
-            $qb->orderBy('m.displayOrder', 'ASC');
-        }
-
-        $page = $this->paginator->paginate($qb, $pagination);
-
-        $data = array_map(static fn (AppModule $m) => [
-            'id' => $m->getId(),
-            'code' => $m->getCode(),
-            'name' => $m->getName(),
-            'icon' => $m->getIcon(),
-            'displayOrder' => $m->getDisplayOrder(),
-            'active' => $m->isActive(),
-            'createdAt' => $m->getCreatedAt()->format(\DateTimeInterface::ATOM),
-        ], $page->data);
-
-        return $this->json(['data' => $data, 'meta' => $page->meta]);
+        return $this->json($this->appModuleService->list($pagination));
     }
 
     #[Route('', methods: ['POST'])]
-    public function create(Request $request): JsonResponse
-    {
-        $data = $request->toArray();
-        $m = new AppModule();
-        $m->setCode($data['code']);
-        $m->setName($data['name']);
-        $m->setIcon($data['icon'] ?? 'box');
-        $m->setDisplayOrder($data['displayOrder'] ?? 0);
-
-        $this->em->persist($m);
-        $this->em->flush();
-
-        return $this->json(['id' => $m->getId()], Response::HTTP_CREATED);
+    #[OA\Post(
+        summary: 'Crear un nuevo módulo',
+        requestBody: new OA\RequestBody(
+            content: new OA\JsonContent(ref: new Model(type: CreateAppModuleRequest::class)),
+        ),
+    )]
+    #[OA\Response(response: 201, description: 'Módulo creado exitosamente')]
+    public function create(
+        #[MapRequestPayload] CreateAppModuleRequest $request,
+    ): JsonResponse {
+        return $this->json($this->appModuleService->create($request), Response::HTTP_CREATED);
     }
 
-    #[Route('/{id}', methods: ['PUT'])]
-    public function update(int $id, Request $request): JsonResponse
-    {
-        $m = $this->repo->find($id);
-        if (!$m) return $this->json(['error' => 'No encontrado'], 404);
-
-        $data = $request->toArray();
-        if (isset($data['code'])) $m->setCode($data['code']);
-        if (isset($data['name'])) $m->setName($data['name']);
-        if (isset($data['icon'])) $m->setIcon($data['icon']);
-        if (isset($data['displayOrder'])) $m->setDisplayOrder($data['displayOrder']);
-        if (isset($data['active'])) $m->setActive($data['active']);
-
-        $this->em->flush();
-
-        return $this->json(['id' => $m->getId()]);
+    #[Route('/{id}', methods: ['PUT'], requirements: ['id' => '\d+'])]
+    #[OA\Put(
+        summary: 'Actualizar un módulo',
+        requestBody: new OA\RequestBody(
+            content: new OA\JsonContent(ref: new Model(type: UpdateAppModuleRequest::class)),
+        ),
+    )]
+    #[OA\Response(response: 200, description: 'Módulo actualizado')]
+    #[OA\Response(response: 404, description: 'Módulo no encontrado')]
+    public function update(
+        int $id,
+        #[MapRequestPayload] UpdateAppModuleRequest $request,
+    ): JsonResponse {
+        return $this->json($this->appModuleService->update($id, $request));
     }
 
-    #[Route('/{id}', methods: ['DELETE'])]
+    #[Route('/{id}', methods: ['DELETE'], requirements: ['id' => '\d+'])]
+    #[OA\Delete(summary: 'Eliminar un módulo')]
+    #[OA\Response(response: 204, description: 'Módulo eliminado')]
+    #[OA\Response(response: 404, description: 'Módulo no encontrado')]
     public function delete(int $id): JsonResponse
     {
-        $m = $this->repo->find($id);
-        if (!$m) return $this->json(['error' => 'No encontrado'], 404);
-
-        $this->em->remove($m);
-        $this->em->flush();
-
+        $this->appModuleService->delete($id);
         return $this->json(null, Response::HTTP_NO_CONTENT);
     }
 }

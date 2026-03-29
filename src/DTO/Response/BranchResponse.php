@@ -13,8 +13,9 @@ final readonly class BranchResponse
     public string $companyName;
     public string $name;
     public ?string $code;
-    public ?string $address;
+    public ?array $address;
     public ?string $phone;
+    public ?string $image;
     public bool $active;
     public string $createdAt;
     public string $updatedAt;
@@ -28,6 +29,7 @@ final readonly class BranchResponse
         $this->code = $branch->getCode();
         $this->address = $branch->getAddress();
         $this->phone = $branch->getPhone();
+        $this->image = $branch->getImage();
         $this->active = $branch->isActive();
         $this->createdAt = $branch->getCreatedAt()->format(\DateTimeInterface::ATOM);
         $this->updatedAt = $branch->getUpdatedAt()->format(\DateTimeInterface::ATOM);

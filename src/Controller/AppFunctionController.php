@@ -4,18 +4,18 @@ declare(strict_types=1);
 
 namespace App\Controller;
 
-use App\Entity\AppFunction;
+use App\DTO\Request\CreateAppFunctionRequest;
+use App\DTO\Request\UpdateAppFunctionRequest;
 use App\Pagination\PaginationRequest;
-use App\Pagination\Paginator;
-use App\Repository\AppFunctionRepository;
-use App\Repository\AppModuleRepository;
-use Doctrine\ORM\EntityManagerInterface;
+use App\Service\AppFunctionService;
+use Nelmio\ApiDocBundle\Attribute\Model;
 use OpenApi\Attributes as OA;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpKernel\Attribute\MapQueryString;
+use Symfony\Component\HttpKernel\Attribute\MapRequestPayload;
 use Symfony\Component\Routing\Attribute\Route;
 
 #[Route('/api/seguridad/functions')]
@@ -23,100 +23,60 @@ use Symfony\Component\Routing\Attribute\Route;
 final class AppFunctionController extends AbstractController
 {
     public function __construct(
-        private readonly AppFunctionRepository $repo,
-        private readonly AppModuleRepository $moduleRepo,
-        private readonly EntityManagerInterface $em,
-        private readonly Paginator $paginator,
-    ) {}
+        private readonly AppFunctionService $appFunctionService,
+    ) {
+    }
 
     #[Route('', methods: ['GET'])]
+    #[OA\Get(summary: 'Listar funcionalidades con paginación')]
+    #[OA\Parameter(name: 'moduleId', in: 'query', schema: new OA\Schema(type: 'integer'))]
+    #[OA\Response(response: 200, description: 'Lista paginada de funcionalidades')]
     public function index(
-        Request $request,
+        Request $httpRequest,
         #[MapQueryString] ?PaginationRequest $pagination = null,
     ): JsonResponse {
         $pagination ??= new PaginationRequest();
-        $moduleId = $request->query->get('moduleId');
-
-        $qb = $this->repo->createQueryBuilder('f')
-            ->join('f.appModule', 'm')
-            ->addSelect('m');
-
-        if ($moduleId) {
-            $qb->andWhere('f.appModule = :mid')->setParameter('mid', $moduleId);
-        }
-        if ($pagination->search) {
-            $qb->andWhere('f.name LIKE :s OR f.code LIKE :s')->setParameter('s', "%{$pagination->search}%");
-        }
-
-        if ($pagination->sort === null) {
-            $qb->orderBy('m.displayOrder', 'ASC')->addOrderBy('f.displayOrder', 'ASC');
-        }
-
-        $page = $this->paginator->paginate($qb, $pagination);
-
-        $data = array_map(static fn (AppFunction $f) => [
-            'id' => $f->getId(),
-            'code' => $f->getCode(),
-            'name' => $f->getName(),
-            'moduleId' => $f->getAppModule()->getId(),
-            'moduleName' => $f->getAppModule()->getName(),
-            'displayOrder' => $f->getDisplayOrder(),
-            'active' => $f->isActive(),
-            'createdAt' => $f->getCreatedAt()->format(\DateTimeInterface::ATOM),
-        ], $page->data);
-
-        return $this->json(['data' => $data, 'meta' => $page->meta]);
+        $moduleId = $httpRequest->query->getInt('moduleId') ?: null;
+        return $this->json($this->appFunctionService->list($pagination, $moduleId));
     }
 
     #[Route('', methods: ['POST'])]
-    public function create(Request $request): JsonResponse
-    {
-        $data = $request->toArray();
-        $module = $this->moduleRepo->find($data['moduleId'] ?? 0);
-        if (!$module) return $this->json(['error' => 'Módulo no encontrado'], 422);
-
-        $f = new AppFunction();
-        $f->setAppModule($module);
-        $f->setCode($data['code']);
-        $f->setName($data['name']);
-        $f->setDisplayOrder($data['displayOrder'] ?? 0);
-
-        $this->em->persist($f);
-        $this->em->flush();
-
-        return $this->json(['id' => $f->getId()], Response::HTTP_CREATED);
+    #[OA\Post(
+        summary: 'Crear una nueva funcionalidad',
+        requestBody: new OA\RequestBody(
+            content: new OA\JsonContent(ref: new Model(type: CreateAppFunctionRequest::class)),
+        ),
+    )]
+    #[OA\Response(response: 201, description: 'Funcionalidad creada exitosamente')]
+    public function create(
+        #[MapRequestPayload] CreateAppFunctionRequest $request,
+    ): JsonResponse {
+        return $this->json($this->appFunctionService->create($request), Response::HTTP_CREATED);
     }
 
-    #[Route('/{id}', methods: ['PUT'])]
-    public function update(int $id, Request $request): JsonResponse
-    {
-        $f = $this->repo->find($id);
-        if (!$f) return $this->json(['error' => 'No encontrado'], 404);
-
-        $data = $request->toArray();
-        if (isset($data['code'])) $f->setCode($data['code']);
-        if (isset($data['name'])) $f->setName($data['name']);
-        if (isset($data['displayOrder'])) $f->setDisplayOrder($data['displayOrder']);
-        if (isset($data['active'])) $f->setActive($data['active']);
-        if (isset($data['moduleId'])) {
-            $module = $this->moduleRepo->find($data['moduleId']);
-            if ($module) $f->setAppModule($module);
-        }
-
-        $this->em->flush();
-
-        return $this->json(['id' => $f->getId()]);
+    #[Route('/{id}', methods: ['PUT'], requirements: ['id' => '\d+'])]
+    #[OA\Put(
+        summary: 'Actualizar una funcionalidad',
+        requestBody: new OA\RequestBody(
+            content: new OA\JsonContent(ref: new Model(type: UpdateAppFunctionRequest::class)),
+        ),
+    )]
+    #[OA\Response(response: 200, description: 'Funcionalidad actualizada')]
+    #[OA\Response(response: 404, description: 'Funcionalidad no encontrada')]
+    public function update(
+        int $id,
+        #[MapRequestPayload] UpdateAppFunctionRequest $request,
+    ): JsonResponse {
+        return $this->json($this->appFunctionService->update($id, $request));
     }
 
-    #[Route('/{id}', methods: ['DELETE'])]
+    #[Route('/{id}', methods: ['DELETE'], requirements: ['id' => '\d+'])]
+    #[OA\Delete(summary: 'Eliminar una funcionalidad')]
+    #[OA\Response(response: 204, description: 'Funcionalidad eliminada')]
+    #[OA\Response(response: 404, description: 'Funcionalidad no encontrada')]
     public function delete(int $id): JsonResponse
     {
-        $f = $this->repo->find($id);
-        if (!$f) return $this->json(['error' => 'No encontrado'], 404);
-
-        $this->em->remove($f);
-        $this->em->flush();
-
+        $this->appFunctionService->delete($id);
         return $this->json(null, Response::HTTP_NO_CONTENT);
     }
 }

@@ -14,11 +14,13 @@ final readonly class UpdateCompanyRequest
 
         public ?string $tradeName = null,
         public ?string $taxId = null,
-        public ?string $address = null,
+        public ?array $address = null,
         public ?string $phone = null,
 
         #[Assert\Email]
         public ?string $email = null,
+        public ?string $image = null,
+        public ?array $socialNetworks = null,
 
         public ?bool $active = null,
     ) {

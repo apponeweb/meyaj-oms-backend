@@ -4,17 +4,17 @@ declare(strict_types=1);
 
 namespace App\Controller;
 
-use App\Entity\ActionCatalog;
+use App\DTO\Request\CreateActionCatalogRequest;
+use App\DTO\Request\UpdateActionCatalogRequest;
 use App\Pagination\PaginationRequest;
-use App\Pagination\Paginator;
-use App\Repository\ActionCatalogRepository;
-use Doctrine\ORM\EntityManagerInterface;
+use App\Service\ActionCatalogService;
+use Nelmio\ApiDocBundle\Attribute\Model;
 use OpenApi\Attributes as OA;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
-use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpKernel\Attribute\MapQueryString;
+use Symfony\Component\HttpKernel\Attribute\MapRequestPayload;
 use Symfony\Component\Routing\Attribute\Route;
 
 #[Route('/api/seguridad/actions')]
@@ -22,76 +22,57 @@ use Symfony\Component\Routing\Attribute\Route;
 final class ActionCatalogController extends AbstractController
 {
     public function __construct(
-        private readonly ActionCatalogRepository $repo,
-        private readonly EntityManagerInterface $em,
-        private readonly Paginator $paginator,
-    ) {}
+        private readonly ActionCatalogService $actionCatalogService,
+    ) {
+    }
 
     #[Route('', methods: ['GET'])]
+    #[OA\Get(summary: 'Listar acciones con paginación')]
+    #[OA\Response(response: 200, description: 'Lista paginada de acciones')]
     public function index(
         #[MapQueryString] ?PaginationRequest $pagination = null,
     ): JsonResponse {
         $pagination ??= new PaginationRequest();
-
-        $qb = $this->repo->createQueryBuilder('a');
-
-        if ($pagination->search) {
-            $qb->andWhere('a.name LIKE :s OR a.code LIKE :s')->setParameter('s', "%{$pagination->search}%");
-        }
-
-        if ($pagination->sort === null) {
-            $qb->orderBy('a.id', 'ASC');
-        }
-
-        $page = $this->paginator->paginate($qb, $pagination);
-
-        $data = array_map(static fn (ActionCatalog $a) => [
-            'id' => $a->getId(),
-            'code' => $a->getCode(),
-            'name' => $a->getName(),
-        ], $page->data);
-
-        return $this->json(['data' => $data, 'meta' => $page->meta]);
+        return $this->json($this->actionCatalogService->list($pagination));
     }
 
     #[Route('', methods: ['POST'])]
-    public function create(Request $request): JsonResponse
-    {
-        $data = $request->toArray();
-        $a = new ActionCatalog();
-        $a->setCode($data['code']);
-        $a->setName($data['name']);
-
-        $this->em->persist($a);
-        $this->em->flush();
-
-        return $this->json(['id' => $a->getId()], Response::HTTP_CREATED);
+    #[OA\Post(
+        summary: 'Crear una nueva acción',
+        requestBody: new OA\RequestBody(
+            content: new OA\JsonContent(ref: new Model(type: CreateActionCatalogRequest::class)),
+        ),
+    )]
+    #[OA\Response(response: 201, description: 'Acción creada exitosamente')]
+    public function create(
+        #[MapRequestPayload] CreateActionCatalogRequest $request,
+    ): JsonResponse {
+        return $this->json($this->actionCatalogService->create($request), Response::HTTP_CREATED);
     }
 
-    #[Route('/{id}', methods: ['PUT'])]
-    public function update(int $id, Request $request): JsonResponse
-    {
-        $a = $this->repo->find($id);
-        if (!$a) return $this->json(['error' => 'No encontrado'], 404);
-
-        $data = $request->toArray();
-        if (isset($data['code'])) $a->setCode($data['code']);
-        if (isset($data['name'])) $a->setName($data['name']);
-
-        $this->em->flush();
-
-        return $this->json(['id' => $a->getId()]);
+    #[Route('/{id}', methods: ['PUT'], requirements: ['id' => '\d+'])]
+    #[OA\Put(
+        summary: 'Actualizar una acción',
+        requestBody: new OA\RequestBody(
+            content: new OA\JsonContent(ref: new Model(type: UpdateActionCatalogRequest::class)),
+        ),
+    )]
+    #[OA\Response(response: 200, description: 'Acción actualizada')]
+    #[OA\Response(response: 404, description: 'Acción no encontrada')]
+    public function update(
+        int $id,
+        #[MapRequestPayload] UpdateActionCatalogRequest $request,
+    ): JsonResponse {
+        return $this->json($this->actionCatalogService->update($id, $request));
     }
 
-    #[Route('/{id}', methods: ['DELETE'])]
+    #[Route('/{id}', methods: ['DELETE'], requirements: ['id' => '\d+'])]
+    #[OA\Delete(summary: 'Eliminar una acción')]
+    #[OA\Response(response: 204, description: 'Acción eliminada')]
+    #[OA\Response(response: 404, description: 'Acción no encontrada')]
     public function delete(int $id): JsonResponse
     {
-        $a = $this->repo->find($id);
-        if (!$a) return $this->json(['error' => 'No encontrado'], 404);
-
-        $this->em->remove($a);
-        $this->em->flush();
-
+        $this->actionCatalogService->delete($id);
         return $this->json(null, Response::HTTP_NO_CONTENT);
     }
 }

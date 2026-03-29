@@ -153,6 +153,8 @@ final readonly class RoleService
         return new RoleDetailResponse($role, $this->appFunctionRepository);
     }
 
+    private const READ_ONLY_FUNCTIONS = ['modules_mgmt', 'functions_mgmt', 'actions_mgmt'];
+
     /** @return array<int, array{code: string, name: string, functions: array}> */
     public function getAllModules(): array
     {
@@ -163,7 +165,11 @@ final readonly class RoleService
                 'code' => $m->getCode(),
                 'name' => $m->getName(),
                 'functions' => array_map(
-                    static fn ($f) => ['code' => $f->getCode(), 'name' => $f->getName()],
+                    static fn ($f) => [
+                        'code' => $f->getCode(),
+                        'name' => $f->getName(),
+                        'readOnly' => in_array($f->getCode(), self::READ_ONLY_FUNCTIONS, true),
+                    ],
                     $functions,
                 ),
             ];

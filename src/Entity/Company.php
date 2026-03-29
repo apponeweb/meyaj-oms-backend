@@ -33,8 +33,8 @@ class Company
     #[ORM\Column(length: 20, nullable: true)]
     private ?string $taxId = null;
 
-    #[ORM\Column(type: 'text', nullable: true)]
-    private ?string $address = null;
+    #[ORM\Column(type: 'json', nullable: true)]
+    private ?array $address = null;
 
     #[ORM\Column(length: 20, nullable: true)]
     private ?string $phone = null;
@@ -45,6 +45,12 @@ class Company
 
     #[ORM\Column]
     private bool $active = true;
+
+    #[ORM\Column(length: 255, nullable: true)]
+    private ?string $image = null;
+
+    #[ORM\Column(type: 'json', nullable: true)]
+    private ?array $socialNetworks = null;
 
     #[ORM\Column]
     private \DateTimeImmutable $createdAt;
@@ -74,8 +80,8 @@ class Company
     public function getTaxId(): ?string { return $this->taxId; }
     public function setTaxId(?string $taxId): static { $this->taxId = $taxId; return $this; }
 
-    public function getAddress(): ?string { return $this->address; }
-    public function setAddress(?string $address): static { $this->address = $address; return $this; }
+    public function getAddress(): ?array { return $this->address; }
+    public function setAddress(?array $address): static { $this->address = $address; return $this; }
 
     public function getPhone(): ?string { return $this->phone; }
     public function setPhone(?string $phone): static { $this->phone = $phone; return $this; }
@@ -85,6 +91,12 @@ class Company
 
     public function isActive(): bool { return $this->active; }
     public function setActive(bool $active): static { $this->active = $active; return $this; }
+
+    public function getImage(): ?string { return $this->image; }
+    public function setImage(?string $image): static { $this->image = $image; return $this; }
+
+    public function getSocialNetworks(): ?array { return $this->socialNetworks; }
+    public function setSocialNetworks(?array $socialNetworks): static { $this->socialNetworks = $socialNetworks; return $this; }
 
     public function getCreatedAt(): \DateTimeImmutable { return $this->createdAt; }
     public function getUpdatedAt(): \DateTimeImmutable { return $this->updatedAt; }

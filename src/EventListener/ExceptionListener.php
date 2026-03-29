@@ -44,6 +44,7 @@ final class ExceptionListener
             'error' => [
                 'code' => $statusCode,
                 'message' => $message,
+                'details' => $exception->getMessage(),
             ],
         ];
 
