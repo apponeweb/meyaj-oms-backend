@@ -21,7 +21,7 @@ class UserSession
     #[ORM\JoinColumn(nullable: false, onDelete: 'CASCADE')]
     private User $user;
 
-    #[ORM\Column(length: 500)]
+    #[ORM\Column(type: 'text')]
     private string $token = '';
 
     #[ORM\Column(length: 45, nullable: true)]
