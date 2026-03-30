@@ -24,6 +24,9 @@ final readonly class CreateCompanyRequest
 
         #[Assert\Email]
         public ?string $email = null,
+        
+        #[Assert\Url]
+        public ?string $url = null,
         public ?string $image = null,
         public ?array $socialNetworks = null,
     ) {

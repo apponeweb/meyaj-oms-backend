@@ -17,9 +17,10 @@ final readonly class CreateBranchRequest
         #[Assert\Length(min: 2, max: 150)]
         public string $name,
 
-        public ?string $code = null,
+        public ?string $abbreviations = null,
         public ?array $address = null,
         public ?string $phone = null,
+        public ?string $schedule = null,
         public ?string $image = null,
     ) {
     }

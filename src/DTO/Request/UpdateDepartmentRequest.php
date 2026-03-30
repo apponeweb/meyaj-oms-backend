@@ -12,6 +12,9 @@ final readonly class UpdateDepartmentRequest
         #[Assert\Length(min: 2, max: 150)]
         public ?string $name = null,
 
+        #[Assert\Length(max: 20)]
+        public ?string $acronym = null,
+
         public ?string $description = null,
         public ?bool $active = null,
     ) {

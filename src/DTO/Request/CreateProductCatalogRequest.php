@@ -13,6 +13,9 @@ final readonly class CreateProductCatalogRequest
         #[Assert\Length(min: 2, max: 100)]
         public string $name,
 
+        #[Assert\Length(max: 10)]
+        public ?string $acronym = null,
+
         public ?string $description = null,
     ) {
     }

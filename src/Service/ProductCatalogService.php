@@ -38,21 +38,23 @@ final readonly class ProductCatalogService
         return $this->toArray($entity);
     }
 
-    public function create(string $entityClass, string $name, ?string $description = null): array
+    public function create(string $entityClass, string $name, ?string $acronym = null, ?string $description = null): array
     {
         $entity = new $entityClass();
         $entity->setName($name);
+        $entity->setAcronym($acronym);
         $entity->setDescription($description);
         $this->em->persist($entity);
         $this->em->flush();
         return $this->toArray($entity);
     }
 
-    public function update(string $entityClass, int $id, ?string $name, ?string $description, ?bool $active): array
+    public function update(string $entityClass, int $id, ?string $name, ?string $acronym, ?string $description, ?bool $active): array
     {
         $entity = $this->em->getRepository($entityClass)->find($id);
         if ($entity === null) throw new NotFoundHttpException('Registro no encontrado.');
         if ($name !== null) $entity->setName($name);
+        if ($acronym !== null) $entity->setAcronym($acronym);
         if ($description !== null) $entity->setDescription($description);
         if ($active !== null) $entity->setActive($active);
         $this->em->flush();
@@ -72,6 +74,7 @@ final readonly class ProductCatalogService
         return [
             'id' => $entity->getId(),
             'name' => $entity->getName(),
+            'acronym' => $entity->getAcronym(),
             'description' => $entity->getDescription(),
             'active' => $entity->isActive(),
             'createdAt' => $entity->getCreatedAt()->format(\DateTimeInterface::ATOM),

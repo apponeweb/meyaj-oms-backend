@@ -56,6 +56,7 @@ final readonly class CategoryService
     {
         $category = new Category();
         $category->setName($request->name);
+        $category->setAcronym($request->acronym);
         $category->setDescription($request->description);
 
         $this->em->persist($category);
@@ -74,6 +75,10 @@ final readonly class CategoryService
 
         if ($request->name !== null) {
             $category->setName($request->name);
+        }
+
+        if ($request->acronym !== null) {
+            $category->setAcronym($request->acronym);
         }
 
         if ($request->description !== null) {

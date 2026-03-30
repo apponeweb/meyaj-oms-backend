@@ -63,9 +63,10 @@ final readonly class BranchService
         $branch = new Branch();
         $branch->setCompany($company);
         $branch->setName($request->name);
-        $branch->setCode($request->code);
+        $branch->setAbbreviations($request->abbreviations);
         $branch->setAddress($request->address);
         $branch->setPhone($request->phone);
+        $branch->setSchedule($request->schedule);
         $branch->setImage($request->image);
 
         $this->em->persist($branch);
@@ -82,9 +83,10 @@ final readonly class BranchService
         }
 
         if ($request->name !== null) $branch->setName($request->name);
-        if ($request->code !== null) $branch->setCode($request->code);
+        if ($request->abbreviations !== null) $branch->setAbbreviations($request->abbreviations);
         if ($request->address !== null) $branch->setAddress($request->address);
         if ($request->phone !== null) $branch->setPhone($request->phone);
+        if ($request->schedule !== null) $branch->setSchedule($request->schedule);
         if ($request->image !== null) $branch->setImage($request->image);
         if ($request->active !== null) $branch->setActive($request->active);
 

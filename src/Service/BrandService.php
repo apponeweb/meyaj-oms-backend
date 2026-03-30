@@ -44,6 +44,7 @@ final readonly class BrandService
     {
         $b = new Brand();
         $b->setName($request->name);
+        $b->setAcronym($request->acronym);
         $b->setDescription($request->description);
         $this->em->persist($b);
         $this->em->flush();
@@ -55,6 +56,7 @@ final readonly class BrandService
         $b = $this->brandRepository->find($id);
         if ($b === null) throw new NotFoundHttpException(sprintf('Marca con ID %d no encontrada.', $id));
         if ($request->name !== null) $b->setName($request->name);
+        if ($request->acronym !== null) $b->setAcronym($request->acronym);
         if ($request->description !== null) $b->setDescription($request->description);
         if ($request->active !== null) $b->setActive($request->active);
         $this->em->flush();

@@ -11,11 +11,14 @@ final readonly class CreateDepartmentRequest
     public function __construct(
         #[Assert\NotBlank]
         #[Assert\Positive]
-        public int $branchId,
+        public int $companyId,
 
         #[Assert\NotBlank]
         #[Assert\Length(min: 2, max: 150)]
         public string $name,
+
+        #[Assert\Length(max: 20)]
+        public ?string $acronym = null,
 
         public ?string $description = null,
     ) {

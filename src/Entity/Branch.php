@@ -5,8 +5,6 @@ declare(strict_types=1);
 namespace App\Entity;
 
 use App\Repository\BranchRepository;
-use Doctrine\Common\Collections\ArrayCollection;
-use Doctrine\Common\Collections\Collection;
 use Doctrine\ORM\Mapping as ORM;
 use Symfony\Bridge\Doctrine\Validator\Constraints\UniqueEntity;
 use Symfony\Component\Validator\Constraints as Assert;
@@ -33,13 +31,16 @@ class Branch
     private string $name = '';
 
     #[ORM\Column(length: 20, nullable: true)]
-    private ?string $code = null;
+    private ?string $abbreviations = null;
 
     #[ORM\Column(type: 'json', nullable: true)]
     private ?array $address = null;
 
     #[ORM\Column(length: 20, nullable: true)]
     private ?string $phone = null;
+
+    #[ORM\Column(type: 'text', nullable: true)]
+    private ?string $schedule = null;
 
     #[ORM\Column(type: 'text', nullable: true)]
     private ?string $image = null;
@@ -53,15 +54,10 @@ class Branch
     #[ORM\Column]
     private \DateTimeImmutable $updatedAt;
 
-    /** @var Collection<int, Department> */
-    #[ORM\OneToMany(targetEntity: Department::class, mappedBy: 'branch')]
-    private Collection $departments;
-
     public function __construct()
     {
         $this->createdAt = new \DateTimeImmutable();
         $this->updatedAt = new \DateTimeImmutable();
-        $this->departments = new ArrayCollection();
     }
 
     public function getId(): ?int { return $this->id; }
@@ -72,14 +68,17 @@ class Branch
     public function getName(): string { return $this->name; }
     public function setName(string $name): static { $this->name = $name; return $this; }
 
-    public function getCode(): ?string { return $this->code; }
-    public function setCode(?string $code): static { $this->code = $code; return $this; }
+    public function getAbbreviations(): ?string { return $this->abbreviations; }
+    public function setAbbreviations(?string $abbreviations): static { $this->abbreviations = $abbreviations; return $this; }
 
     public function getAddress(): ?array { return $this->address; }
     public function setAddress(?array $address): static { $this->address = $address; return $this; }
 
     public function getPhone(): ?string { return $this->phone; }
     public function setPhone(?string $phone): static { $this->phone = $phone; return $this; }
+
+    public function getSchedule(): ?string { return $this->schedule; }
+    public function setSchedule(?string $schedule): static { $this->schedule = $schedule; return $this; }
 
     public function getImage(): ?string { return $this->image; }
     public function setImage(?string $image): static { $this->image = $image; return $this; }
@@ -93,6 +92,4 @@ class Branch
     #[ORM\PreUpdate]
     public function setUpdatedAtValue(): void { $this->updatedAt = new \DateTimeImmutable(); }
 
-    /** @return Collection<int, Department> */
-    public function getDepartments(): Collection { return $this->departments; }
 }

@@ -70,7 +70,7 @@ final class ProductCatalogController extends AbstractController
         #[MapRequestPayload] CreateProductCatalogRequest $request,
     ): JsonResponse {
         return $this->json(
-            $this->service->create(self::CATALOG_MAP[$type], $request->name, $request->description),
+            $this->service->create(self::CATALOG_MAP[$type], $request->name, $request->acronym, $request->description),
             Response::HTTP_CREATED,
         );
     }
@@ -93,6 +93,7 @@ final class ProductCatalogController extends AbstractController
             self::CATALOG_MAP[$type],
             $id,
             $request->name,
+            $request->acronym,
             $request->description,
             $request->active,
         ));

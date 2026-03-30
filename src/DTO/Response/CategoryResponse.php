@@ -10,6 +10,7 @@ final readonly class CategoryResponse
 {
     public int $id;
     public string $name;
+    public ?string $acronym;
     public ?string $description;
     public string $createdAt;
     public string $updatedAt;
@@ -18,6 +19,7 @@ final readonly class CategoryResponse
     {
         $this->id = $category->getId();
         $this->name = $category->getName();
+        $this->acronym = $category->getAcronym();
         $this->description = $category->getDescription();
         $this->createdAt = $category->getCreatedAt()->format(\DateTimeInterface::ATOM);
         $this->updatedAt = $category->getUpdatedAt()->format(\DateTimeInterface::ATOM);

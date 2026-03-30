@@ -19,20 +19,20 @@ class DepartmentRepository extends ServiceEntityRepository
         parent::__construct($registry, Department::class);
     }
 
-    public function createPaginatedQueryBuilder(?string $search = null, ?int $branchId = null): QueryBuilder
+    public function createPaginatedQueryBuilder(?string $search = null, ?int $companyId = null): QueryBuilder
     {
         $qb = $this->createQueryBuilder('d')
-            ->join('d.branch', 'b')
-            ->addSelect('b');
+            ->join('d.company', 'c')
+            ->addSelect('c');
 
         if ($search !== null && $search !== '') {
             $qb->andWhere('d.name LIKE :search OR d.description LIKE :search')
                 ->setParameter('search', '%' . $search . '%');
         }
 
-        if ($branchId !== null) {
-            $qb->andWhere('b.id = :branchId')
-                ->setParameter('branchId', $branchId);
+        if ($companyId !== null) {
+            $qb->andWhere('c.id = :companyId')
+                ->setParameter('companyId', $companyId);
         }
 
         return $qb;

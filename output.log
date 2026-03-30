@@ -1,0 +1,14 @@
+
+Sembrando Cat├ílogos y Productos (5 registros por tabla)
+=======================================================
+
+Creando Empresas...
+-------------------
+
+ [ERROR] Error durante el sembrado: An       
+         exception occurred while executing a
+         query: SQLSTATE[23000]: Integrity   
+         constraint violation: 1062 Duplicate
+         entry 'Empresa Test 1' for key      
+         'company.UNIQ_4FBF094F5E237E06'     
+

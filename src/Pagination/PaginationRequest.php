@@ -23,6 +23,9 @@ final readonly class PaginationRequest
         public ?string $search = null,
         public ?int $roleId = null,
         public ?string $active = null,
+        public ?int $companyId = null,
+        public ?int $branchId = null,
+        public ?int $departmentId = null,
     ) {
     }
 }

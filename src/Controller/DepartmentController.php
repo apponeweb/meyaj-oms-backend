@@ -29,15 +29,15 @@ final class DepartmentController extends AbstractController
 
     #[Route('', methods: ['GET'])]
     #[OA\Get(summary: 'Listar departamentos con paginación')]
-    #[OA\Parameter(name: 'branchId', in: 'query', schema: new OA\Schema(type: 'integer'))]
+    #[OA\Parameter(name: 'companyId', in: 'query', schema: new OA\Schema(type: 'integer'))]
     #[OA\Response(response: 200, description: 'Lista paginada de departamentos')]
     public function index(
         Request $httpRequest,
         #[MapQueryString] ?PaginationRequest $pagination,
     ): JsonResponse {
         $pagination ??= new PaginationRequest();
-        $branchId = $httpRequest->query->getInt('branchId') ?: null;
-        return $this->json($this->departmentService->list($pagination, $branchId));
+        $companyId = $httpRequest->query->getInt('companyId') ?: null;
+        return $this->json($this->departmentService->list($pagination, $companyId));
     }
 
     #[Route('/{id}', methods: ['GET'], requirements: ['id' => '\d+'])]

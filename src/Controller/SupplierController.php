@@ -12,6 +12,7 @@ use Nelmio\ApiDocBundle\Attribute\Model;
 use OpenApi\Attributes as OA;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
+use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpKernel\Attribute\MapQueryString;
 use Symfony\Component\HttpKernel\Attribute\MapRequestPayload;
@@ -48,4 +49,26 @@ final class SupplierController extends AbstractController
     #[OA\Delete(summary: 'Eliminar proveedor')]
     public function delete(int $id): JsonResponse
     { $this->service->delete($id); return $this->json(null, Response::HTTP_NO_CONTENT); }
+
+    #[Route('/{id}/brands', methods: ['PUT'], requirements: ['id' => '\d+'])]
+    #[OA\Put(summary: 'Asignar marcas a proveedor')]
+    #[OA\RequestBody(content: new OA\JsonContent(properties: [
+        new OA\Property(property: 'brandIds', type: 'array', items: new OA\Items(type: 'integer'))
+    ]))]
+    public function assignBrands(int $id, Request $request): JsonResponse
+    {
+        $data = json_decode($request->getContent(), true) ?? [];
+        return $this->json($this->service->assignBrands($id, $data['brandIds'] ?? []));
+    }
+
+    #[Route('/{id}/tags', methods: ['PUT'], requirements: ['id' => '\d+'])]
+    #[OA\Put(summary: 'Asignar etiquetas a proveedor')]
+    #[OA\RequestBody(content: new OA\JsonContent(properties: [
+        new OA\Property(property: 'tagIds', type: 'array', items: new OA\Items(type: 'integer'))
+    ]))]
+    public function assignTags(int $id, Request $request): JsonResponse
+    {
+        $data = json_decode($request->getContent(), true) ?? [];
+        return $this->json($this->service->assignTags($id, $data['tagIds'] ?? []));
+    }
 }

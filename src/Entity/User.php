@@ -14,7 +14,8 @@ use Symfony\Component\Validator\Constraints as Assert;
 #[ORM\Entity(repositoryClass: UserRepository::class)]
 #[ORM\Table(name: 'app_user', options: ['comment' => 'Usuarios del sistema con credenciales de acceso, rol asignado y estado activo/inactivo'])]
 #[ORM\HasLifecycleCallbacks]
-#[UniqueEntity(fields: ['email'], message: 'Este email ya está registrado')]
+#[UniqueEntity(fields: ['email'], message: 'Ya existe un usuario con este correo electrónico. Por favor, utiliza otro correo.')]
+#[UniqueEntity(fields: ['phone'], message: 'Ya existe un usuario con este número de teléfono. Por favor, utiliza otro número.')]
 class User implements UserInterface, PasswordAuthenticatedUserInterface
 {
     #[ORM\Id]
@@ -31,7 +32,7 @@ class User implements UserInterface, PasswordAuthenticatedUserInterface
     #[Assert\Length(max: 100)]
     private ?string $lastName = null;
 
-    #[ORM\Column(length: 20, nullable: true)]
+    #[ORM\Column(length: 20, nullable: true, unique: true)]
     #[Assert\Length(max: 20)]
     private ?string $phone = null;
 
@@ -51,8 +52,27 @@ class User implements UserInterface, PasswordAuthenticatedUserInterface
     #[ORM\JoinColumn(nullable: true, onDelete: 'SET NULL')]
     private ?Role $role = null;
 
+    #[ORM\ManyToOne(targetEntity: Company::class)]
+    #[ORM\JoinColumn(nullable: true, onDelete: 'SET NULL')]
+    private ?Company $company = null;
+
+    #[ORM\ManyToOne(targetEntity: Branch::class)]
+    #[ORM\JoinColumn(nullable: true, onDelete: 'SET NULL')]
+    private ?Branch $branch = null;
+
+    #[ORM\ManyToOne(targetEntity: Department::class)]
+    #[ORM\JoinColumn(nullable: true, onDelete: 'SET NULL')]
+    private ?Department $department = null;
+
+    #[ORM\Column(length: 20, nullable: true)]
+    #[Assert\Length(max: 20)]
+    private ?string $acronym = null;
+
     #[ORM\Column]
     private bool $active = true;
+
+    #[ORM\Column]
+    private bool $isMobileAllowed = false;
 
     #[ORM\Column(length: 255, nullable: true)]
     private ?string $image = null;
@@ -172,6 +192,54 @@ class User implements UserInterface, PasswordAuthenticatedUserInterface
         return $this;
     }
 
+    public function getCompany(): ?Company
+    {
+        return $this->company;
+    }
+
+    public function setCompany(?Company $company): static
+    {
+        $this->company = $company;
+
+        return $this;
+    }
+
+    public function getBranch(): ?Branch
+    {
+        return $this->branch;
+    }
+
+    public function setBranch(?Branch $branch): static
+    {
+        $this->branch = $branch;
+
+        return $this;
+    }
+
+    public function getDepartment(): ?Department
+    {
+        return $this->department;
+    }
+
+    public function setDepartment(?Department $department): static
+    {
+        $this->department = $department;
+
+        return $this;
+    }
+
+    public function getAcronym(): ?string
+    {
+        return $this->acronym;
+    }
+
+    public function setAcronym(?string $acronym): static
+    {
+        $this->acronym = $acronym;
+
+        return $this;
+    }
+
     public function isActive(): bool
     {
         return $this->active;
@@ -180,6 +248,18 @@ class User implements UserInterface, PasswordAuthenticatedUserInterface
     public function setActive(bool $active): static
     {
         $this->active = $active;
+
+        return $this;
+    }
+
+    public function isMobileAllowed(): bool
+    {
+        return $this->isMobileAllowed;
+    }
+
+    public function setIsMobileAllowed(bool $isMobileAllowed): static
+    {
+        $this->isMobileAllowed = $isMobileAllowed;
 
         return $this;
     }

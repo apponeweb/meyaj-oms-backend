@@ -12,7 +12,7 @@ final readonly class CreateUserRequest
         #[Assert\NotBlank]
         #[Assert\Length(min: 2, max: 100)]
         public string $name,
-        
+
         #[Assert\Length(max: 100)]
         public ?string $lastName = null,
 
@@ -32,9 +32,23 @@ final readonly class CreateUserRequest
         #[Assert\Positive]
         public ?int $roleId = null,
 
+        #[Assert\Positive]
+        public ?int $companyId = null,
+
+        #[Assert\Positive]
+        public ?int $branchId = null,
+
+        #[Assert\Positive]
+        public ?int $departmentId = null,
+
+        #[Assert\Length(max: 20)]
+        public ?string $acronym = null,
+
         public ?string $image = null,
 
         public bool $active = true,
+
+        public bool $isMobileAllowed = false,
     ) {
     }
 }

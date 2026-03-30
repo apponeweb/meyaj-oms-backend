@@ -27,15 +27,8 @@ class Supplier
     #[Assert\Length(min: 2, max: 150)]
     private string $name = '';
 
-    #[ORM\Column(length: 150, nullable: true)]
-    private ?string $contactName = null;
-
-    #[ORM\Column(length: 255, nullable: true)]
-    #[Assert\Email]
-    private ?string $email = null;
-
-    #[ORM\Column(length: 20, nullable: true)]
-    private ?string $phone = null;
+    #[ORM\Column(type: 'json', nullable: true)]
+    private ?array $contacts = null;
 
     #[ORM\Column(type: 'text', nullable: true)]
     private ?string $address = null;
@@ -59,22 +52,23 @@ class Supplier
     #[ORM\OneToMany(targetEntity: SupplierBrand::class, mappedBy: 'supplier', cascade: ['persist', 'remove'])]
     private Collection $supplierBrands;
 
+    #[ORM\ManyToMany(targetEntity: LabelCatalog::class)]
+    #[ORM\JoinTable(name: 'supplier_label')]
+    private Collection $tags;
+
     public function __construct()
     {
         $this->createdAt = new \DateTimeImmutable();
         $this->updatedAt = new \DateTimeImmutable();
         $this->supplierBrands = new ArrayCollection();
+        $this->tags = new ArrayCollection();
     }
 
     public function getId(): ?int { return $this->id; }
     public function getName(): string { return $this->name; }
     public function setName(string $name): static { $this->name = $name; return $this; }
-    public function getContactName(): ?string { return $this->contactName; }
-    public function setContactName(?string $contactName): static { $this->contactName = $contactName; return $this; }
-    public function getEmail(): ?string { return $this->email; }
-    public function setEmail(?string $email): static { $this->email = $email; return $this; }
-    public function getPhone(): ?string { return $this->phone; }
-    public function setPhone(?string $phone): static { $this->phone = $phone; return $this; }
+    public function getContacts(): ?array { return $this->contacts; }
+    public function setContacts(?array $contacts): static { $this->contacts = $contacts; return $this; }
     public function getAddress(): ?string { return $this->address; }
     public function setAddress(?string $address): static { $this->address = $address; return $this; }
     public function getCountry(): ?string { return $this->country; }
@@ -91,4 +85,21 @@ class Supplier
 
     /** @return Collection<int, SupplierBrand> */
     public function getSupplierBrands(): Collection { return $this->supplierBrands; }
+
+    /** @return Collection<int, LabelCatalog> */
+    public function getTags(): Collection { return $this->tags; }
+
+    public function addTag(LabelCatalog $tag): static
+    {
+        if (!$this->tags->contains($tag)) {
+            $this->tags->add($tag);
+        }
+        return $this;
+    }
+
+    public function removeTag(LabelCatalog $tag): static
+    {
+        $this->tags->removeElement($tag);
+        return $this;
+    }
 }

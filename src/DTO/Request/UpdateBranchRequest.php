@@ -12,9 +12,10 @@ final readonly class UpdateBranchRequest
         #[Assert\Length(min: 2, max: 150)]
         public ?string $name = null,
 
-        public ?string $code = null,
+        public ?string $abbreviations = null,
         public ?array $address = null,
         public ?string $phone = null,
+        public ?string $schedule = null,
         public ?string $image = null,
         public ?bool $active = null,
     ) {

@@ -11,6 +11,9 @@ use App\Entity\User;
 use App\Pagination\PaginatedResponse;
 use App\Pagination\PaginationRequest;
 use App\Pagination\Paginator;
+use App\Repository\BranchRepository;
+use App\Repository\CompanyRepository;
+use App\Repository\DepartmentRepository;
 use App\Repository\RoleRepository;
 use App\Repository\UserRepository;
 use Doctrine\ORM\EntityManagerInterface;
@@ -24,6 +27,9 @@ final readonly class UserService
         private EntityManagerInterface $em,
         private UserRepository $userRepository,
         private RoleRepository $roleRepository,
+        private CompanyRepository $companyRepository,
+        private BranchRepository $branchRepository,
+        private DepartmentRepository $departmentRepository,
         private UserPasswordHasherInterface $passwordHasher,
         private Paginator $paginator,
     ) {
@@ -35,6 +41,9 @@ final readonly class UserService
             search: $pagination->search,
             roleId: $pagination->roleId,
             active: $pagination->active,
+            companyId: $pagination->companyId,
+            branchId: $pagination->branchId,
+            departmentId: $pagination->departmentId,
         );
 
         $result = $this->paginator->paginate($qb, $pagination);
@@ -61,10 +70,16 @@ final readonly class UserService
 
     public function create(CreateUserRequest $request): UserResponse
     {
-        $existing = $this->userRepository->findOneBy(['email' => $request->email]);
+        $existingEmail = $this->userRepository->findOneBy(['email' => $request->email]);
+        if ($existingEmail !== null) {
+            throw new ConflictHttpException('Ya existe un usuario con el correo electrónico "' . $request->email . '". Por favor, utiliza otro correo.');
+        }
 
-        if ($existing !== null) {
-            throw new ConflictHttpException('El email ya está registrado.');
+        if ($request->phone !== null && $request->phone !== '') {
+            $existingPhone = $this->userRepository->findOneBy(['phone' => $request->phone]);
+            if ($existingPhone !== null) {
+                throw new ConflictHttpException('Ya existe un usuario con el número de teléfono "' . $request->phone . '". Por favor, utiliza otro número.');
+            }
         }
 
         $user = new User();
@@ -73,12 +88,29 @@ final readonly class UserService
         $user->setPhone($request->phone);
         $user->setEmail($request->email);
         $user->setPassword($this->passwordHasher->hashPassword($user, $request->password));
+        $user->setAcronym($request->acronym);
         if ($request->image !== null) $user->setImage($request->image);
+        $user->setIsMobileAllowed($request->isMobileAllowed);
         $user->setRoles($request->roles);
 
         if ($request->roleId !== null) {
             $role = $this->roleRepository->find($request->roleId);
             $user->setRole($role);
+        }
+
+        if ($request->companyId !== null) {
+            $company = $this->companyRepository->find($request->companyId);
+            $user->setCompany($company);
+        }
+
+        if ($request->branchId !== null) {
+            $branch = $this->branchRepository->find($request->branchId);
+            $user->setBranch($branch);
+        }
+
+        if ($request->departmentId !== null) {
+            $department = $this->departmentRepository->find($request->departmentId);
+            $user->setDepartment($department);
         }
 
         $this->em->persist($user);
@@ -110,9 +142,17 @@ final readonly class UserService
         if ($request->email !== null) {
             $existing = $this->userRepository->findOneBy(['email' => $request->email]);
             if ($existing !== null && $existing->getId() !== $user->getId()) {
-                throw new ConflictHttpException('El email ya está registrado.');
+                throw new ConflictHttpException('Ya existe un usuario con el correo electrónico "' . $request->email . '". Por favor, utiliza otro correo.');
             }
             $user->setEmail($request->email);
+        }
+
+        if ($request->phone !== null && $request->phone !== '') {
+            $existingPhone = $this->userRepository->findOneBy(['phone' => $request->phone]);
+            if ($existingPhone !== null && $existingPhone->getId() !== $user->getId()) {
+                throw new ConflictHttpException('Ya existe un usuario con el número de teléfono "' . $request->phone . '". Por favor, utiliza otro número.');
+            }
+            $user->setPhone($request->phone);
         }
 
         if ($request->password !== null) {
@@ -128,12 +168,38 @@ final readonly class UserService
             $user->setRole($role);
         }
 
+        if ($request->companyId !== null) {
+            $company = $this->companyRepository->find($request->companyId);
+            $user->setCompany($company);
+            // Reset branch and department when company changes
+            $user->setBranch(null);
+            $user->setDepartment(null);
+        }
+
+        if ($request->branchId !== null) {
+            $branch = $this->branchRepository->find($request->branchId);
+            $user->setBranch($branch);
+        }
+
+        if ($request->departmentId !== null) {
+            $department = $this->departmentRepository->find($request->departmentId);
+            $user->setDepartment($department);
+        }
+
+        if ($request->acronym !== null) {
+            $user->setAcronym($request->acronym);
+        }
+
         if ($request->image !== null) {
             $user->setImage($request->image);
         }
 
         if ($request->active !== null) {
             $user->setActive($request->active);
+        }
+
+        if ($request->isMobileAllowed !== null) {
+            $user->setIsMobileAllowed($request->isMobileAllowed);
         }
 
         $this->em->flush();

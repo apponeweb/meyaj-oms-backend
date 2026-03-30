@@ -11,9 +11,7 @@ final readonly class CreateSupplierRequest
     public function __construct(
         #[Assert\NotBlank] #[Assert\Length(min: 2, max: 150)]
         public string $name,
-        public ?string $contactName = null,
-        #[Assert\Email] public ?string $email = null,
-        public ?string $phone = null,
+        public ?array $contacts = null,
         public ?string $address = null,
         public ?string $country = null,
         public ?string $taxId = null,

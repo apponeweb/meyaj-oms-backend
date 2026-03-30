@@ -33,7 +33,7 @@ class UserRepository extends ServiceEntityRepository implements PasswordUpgrader
         $this->getEntityManager()->flush();
     }
 
-    public function createPaginatedQueryBuilder(?string $search = null, ?int $roleId = null, ?string $active = null): QueryBuilder
+    public function createPaginatedQueryBuilder(?string $search = null, ?int $roleId = null, ?string $active = null, ?int $companyId = null, ?int $branchId = null, ?int $departmentId = null): QueryBuilder
     {
         $qb = $this->createQueryBuilder('u')
             ->select('u');
@@ -51,6 +51,21 @@ class UserRepository extends ServiceEntityRepository implements PasswordUpgrader
         if ($active !== null && $active !== '') {
             $qb->andWhere('u.active = :active')
                 ->setParameter('active', (int)$active);
+        }
+
+        if ($companyId !== null) {
+            $qb->andWhere('u.company = :companyId')
+                ->setParameter('companyId', $companyId);
+        }
+
+        if ($branchId !== null) {
+            $qb->andWhere('u.branch = :branchId')
+                ->setParameter('branchId', $branchId);
+        }
+
+        if ($departmentId !== null) {
+            $qb->andWhere('u.department = :departmentId')
+                ->setParameter('departmentId', $departmentId);
         }
 
         return $qb;

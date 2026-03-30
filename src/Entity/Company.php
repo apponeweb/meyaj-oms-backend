@@ -55,6 +55,10 @@ class Company
     #[Assert\Email]
     private ?string $email = null;
 
+    #[ORM\Column(length: 255, nullable: true)]
+    #[Assert\Url]
+    private ?string $url = null;
+
     #[ORM\Column]
     private bool $active = true;
 
@@ -74,11 +78,16 @@ class Company
     #[ORM\OneToMany(targetEntity: Branch::class, mappedBy: 'company')]
     private Collection $branches;
 
+    /** @var Collection<int, Department> */
+    #[ORM\OneToMany(targetEntity: Department::class, mappedBy: 'company')]
+    private Collection $departments;
+
     public function __construct()
     {
         $this->createdAt = new \DateTimeImmutable();
         $this->updatedAt = new \DateTimeImmutable();
         $this->branches = new ArrayCollection();
+        $this->departments = new ArrayCollection();
     }
 
     public function getId(): ?int { return $this->id; }
@@ -113,6 +122,9 @@ class Company
     public function getEmail(): ?string { return $this->email; }
     public function setEmail(?string $email): static { $this->email = $email; return $this; }
 
+    public function getUrl(): ?string { return $this->url; }
+    public function setUrl(?string $url): static { $this->url = $url; return $this; }
+
     public function isActive(): bool { return $this->active; }
     public function setActive(bool $active): static { $this->active = $active; return $this; }
 
@@ -130,4 +142,7 @@ class Company
 
     /** @return Collection<int, Branch> */
     public function getBranches(): Collection { return $this->branches; }
+
+    /** @return Collection<int, Department> */
+    public function getDepartments(): Collection { return $this->departments; }
 }

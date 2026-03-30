@@ -12,6 +12,9 @@ final readonly class UpdateCategoryRequest
         #[Assert\Length(min: 2, max: 100)]
         public ?string $name = null,
 
+        #[Assert\Length(max: 10)]
+        public ?string $acronym = null,
+
         public ?string $description = null,
     ) {
     }

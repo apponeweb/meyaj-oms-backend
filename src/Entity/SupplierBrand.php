@@ -22,7 +22,7 @@ class SupplierBrand
     #[ORM\JoinColumn(nullable: false, onDelete: 'CASCADE')]
     private Supplier $supplier;
 
-    #[ORM\ManyToOne(targetEntity: Brand::class)]
+    #[ORM\ManyToOne(targetEntity: Brand::class, inversedBy: 'suppliers')]
     #[ORM\JoinColumn(nullable: false, onDelete: 'CASCADE')]
     private Brand $brand;
 

@@ -19,6 +19,7 @@ final readonly class CompanyResponse
     public ?array $address;
     public ?string $phone;
     public ?string $email;
+    public ?string $url;
     public ?string $image;
     public ?array $socialNetworks;
     public bool $active;
@@ -38,6 +39,7 @@ final readonly class CompanyResponse
         $this->address = $company->getAddress();
         $this->phone = $company->getPhone();
         $this->email = $company->getEmail();
+        $this->url = $company->getUrl();
         $this->image = $company->getImage();
         $this->socialNetworks = $company->getSocialNetworks();
         $this->active = $company->isActive();

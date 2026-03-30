@@ -10,6 +10,7 @@ final readonly class BrandResponse
 {
     public int $id;
     public string $name;
+    public ?string $acronym;
     public ?string $description;
     public bool $active;
     public string $createdAt;
@@ -19,6 +20,7 @@ final readonly class BrandResponse
     {
         $this->id = $b->getId();
         $this->name = $b->getName();
+        $this->acronym = $b->getAcronym();
         $this->description = $b->getDescription();
         $this->active = $b->isActive();
         $this->createdAt = $b->getCreatedAt()->format(\DateTimeInterface::ATOM);

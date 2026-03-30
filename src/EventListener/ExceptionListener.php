@@ -44,10 +44,14 @@ final class ExceptionListener
             $message = 'Ya existe un registro con estos datos.';
             
             // Mapeo opcional de nombres de índices a mensajes amigables
-            if (str_contains($exception->getMessage(), 'uniq_branch_company_name')) {
+            if (str_contains($exception->getMessage(), 'app_user.UNIQ_') && str_contains($exception->getMessage(), 'email')) {
+                $message = 'Ya existe un usuario con este correo electrónico.';
+            } elseif (str_contains($exception->getMessage(), 'app_user.UNIQ_') && str_contains($exception->getMessage(), 'phone')) {
+                $message = 'Ya existe un usuario con este número de teléfono.';
+            } elseif (str_contains($exception->getMessage(), 'uniq_branch_company_name')) {
                 $message = 'Esta sucursal ya existe en esta empresa.';
-            } elseif (str_contains($exception->getMessage(), 'uniq_department_branch_name')) {
-                $message = 'Este departamento ya existe en esta sucursal.';
+            } elseif (str_contains($exception->getMessage(), 'uniq_department_company_name')) {
+                $message = 'Este departamento ya existe en esta empresa.';
             } elseif (str_contains($exception->getMessage(), 'company.UNIQ_') || str_contains($exception->getMessage(), 'company.name')) {
                 $message = 'Esta empresa ya existe.';
             } elseif (str_contains($exception->getMessage(), 'supplier.UNIQ_') || str_contains($exception->getMessage(), 'supplier.name')) {
