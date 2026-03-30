@@ -49,6 +49,15 @@ final class SessionActivityListener
             return;
         }
 
+        // Check if user is active
+        if (!$user->isActive()) {
+            $event->setResponse(new JsonResponse(
+                ['error' => ['code' => 403, 'message' => 'account_disabled']],
+                Response::HTTP_FORBIDDEN,
+            ));
+            return;
+        }
+
         // Check if session has expired due to inactivity
         $threshold = new \DateTimeImmutable("-{$this->sessionTimeoutMinutes} minutes");
         if ($session->getLastActivityAt() < $threshold) {

@@ -12,6 +12,12 @@ final readonly class CreateUserRequest
         #[Assert\NotBlank]
         #[Assert\Length(min: 2, max: 100)]
         public string $name,
+        
+        #[Assert\Length(max: 100)]
+        public ?string $lastName = null,
+
+        #[Assert\Length(max: 20)]
+        public ?string $phone = null,
 
         #[Assert\NotBlank]
         #[Assert\Email]
@@ -21,14 +27,14 @@ final readonly class CreateUserRequest
         #[Assert\Length(min: 6, max: 255)]
         public string $password,
 
-        /** @var list<string> */
-        #[Assert\All([
-            new Assert\Choice(choices: ['ROLE_USER', 'ROLE_ADMIN']),
-        ])]
         public array $roles = [],
 
         #[Assert\Positive]
         public ?int $roleId = null,
+
+        public ?string $image = null,
+
+        public bool $active = true,
     ) {
     }
 }

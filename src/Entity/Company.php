@@ -30,6 +30,18 @@ class Company
     #[ORM\Column(length: 150, nullable: true)]
     private ?string $tradeName = null;
 
+    #[ORM\Column(length: 150, nullable: true)]
+    private ?string $legalName = null;
+
+    #[ORM\Column(length: 20, nullable: true)]
+    private ?string $acronym = null;
+
+    #[ORM\Column(length: 255, nullable: true)]
+    private ?string $tagline = null;
+
+    #[ORM\Column(type: 'text', nullable: true)]
+    private ?string $description = null;
+
     #[ORM\Column(length: 20, nullable: true)]
     private ?string $taxId = null;
 
@@ -76,6 +88,18 @@ class Company
 
     public function getTradeName(): ?string { return $this->tradeName; }
     public function setTradeName(?string $tradeName): static { $this->tradeName = $tradeName; return $this; }
+
+    public function getLegalName(): ?string { return $this->legalName; }
+    public function setLegalName(?string $legalName): static { $this->legalName = $legalName; return $this; }
+
+    public function getAcronym(): ?string { return $this->acronym; }
+    public function setAcronym(?string $acronym): static { $this->acronym = $acronym; return $this; }
+
+    public function getTagline(): ?string { return $this->tagline; }
+    public function setTagline(?string $tagline): static { $this->tagline = $tagline; return $this; }
+
+    public function getDescription(): ?string { return $this->description; }
+    public function setDescription(?string $description): static { $this->description = $description; return $this; }
 
     public function getTaxId(): ?string { return $this->taxId; }
     public function setTaxId(?string $taxId): static { $this->taxId = $taxId; return $this; }

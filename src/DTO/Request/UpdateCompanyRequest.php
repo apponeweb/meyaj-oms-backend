@@ -11,8 +11,11 @@ final readonly class UpdateCompanyRequest
     public function __construct(
         #[Assert\Length(min: 2, max: 150)]
         public ?string $name = null,
-
+        public ?string $acronym = null,
         public ?string $tradeName = null,
+        public ?string $legalName = null,
+        public ?string $tagline = null,
+        public ?string $description = null,
         public ?string $taxId = null,
         public ?array $address = null,
         public ?string $phone = null,

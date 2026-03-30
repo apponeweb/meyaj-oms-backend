@@ -6,11 +6,14 @@ namespace App\Entity;
 
 use App\Repository\DepartmentRepository;
 use Doctrine\ORM\Mapping as ORM;
+use Symfony\Bridge\Doctrine\Validator\Constraints\UniqueEntity;
 use Symfony\Component\Validator\Constraints as Assert;
 
 #[ORM\Entity(repositoryClass: DepartmentRepository::class)]
 #[ORM\Table(name: 'department')]
+#[ORM\UniqueConstraint(name: 'uniq_department_branch_name', columns: ['branch_id', 'name'])]
 #[ORM\HasLifecycleCallbacks]
+#[UniqueEntity(fields: ['branch', 'name'], message: 'Este departamento ya existe en esta sucursal')]
 class Department
 {
     #[ORM\Id]

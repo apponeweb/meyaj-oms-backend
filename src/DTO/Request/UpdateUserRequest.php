@@ -12,6 +12,12 @@ final readonly class UpdateUserRequest
         #[Assert\Length(min: 2, max: 100)]
         public ?string $name = null,
 
+        #[Assert\Length(max: 100)]
+        public ?string $lastName = null,
+
+        #[Assert\Length(max: 20)]
+        public ?string $phone = null,
+
         #[Assert\Email]
         public ?string $email = null,
 
@@ -26,6 +32,10 @@ final readonly class UpdateUserRequest
 
         #[Assert\Positive]
         public ?int $roleId = null,
+
+        public ?string $image = null,
+
+        public ?bool $active = null,
     ) {
     }
 }

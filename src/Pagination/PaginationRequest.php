@@ -21,6 +21,8 @@ final readonly class PaginationRequest
         public string $order = 'asc',
 
         public ?string $search = null,
+        public ?int $roleId = null,
+        public ?string $active = null,
     ) {
     }
 }

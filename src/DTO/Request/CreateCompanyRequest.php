@@ -13,7 +13,11 @@ final readonly class CreateCompanyRequest
         #[Assert\Length(min: 2, max: 150)]
         public string $name,
 
+        public ?string $acronym = null,
         public ?string $tradeName = null,
+        public ?string $legalName = null,
+        public ?string $tagline = null,
+        public ?string $description = null,
         public ?string $taxId = null,
         public ?array $address = null,
         public ?string $phone = null,

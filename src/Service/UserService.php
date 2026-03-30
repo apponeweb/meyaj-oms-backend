@@ -33,6 +33,8 @@ final readonly class UserService
     {
         $qb = $this->userRepository->createPaginatedQueryBuilder(
             search: $pagination->search,
+            roleId: $pagination->roleId,
+            active: $pagination->active,
         );
 
         $result = $this->paginator->paginate($qb, $pagination);
@@ -67,8 +69,11 @@ final readonly class UserService
 
         $user = new User();
         $user->setName($request->name);
+        $user->setLastName($request->lastName);
+        $user->setPhone($request->phone);
         $user->setEmail($request->email);
         $user->setPassword($this->passwordHasher->hashPassword($user, $request->password));
+        if ($request->image !== null) $user->setImage($request->image);
         $user->setRoles($request->roles);
 
         if ($request->roleId !== null) {
@@ -94,6 +99,14 @@ final readonly class UserService
             $user->setName($request->name);
         }
 
+        if ($request->lastName !== null) {
+            $user->setLastName($request->lastName);
+        }
+
+        if ($request->phone !== null) {
+            $user->setPhone($request->phone);
+        }
+
         if ($request->email !== null) {
             $existing = $this->userRepository->findOneBy(['email' => $request->email]);
             if ($existing !== null && $existing->getId() !== $user->getId()) {
@@ -113,6 +126,14 @@ final readonly class UserService
         if ($request->roleId !== null) {
             $role = $this->roleRepository->find($request->roleId);
             $user->setRole($role);
+        }
+
+        if ($request->image !== null) {
+            $user->setImage($request->image);
+        }
+
+        if ($request->active !== null) {
+            $user->setActive($request->active);
         }
 
         $this->em->flush();

@@ -10,7 +10,11 @@ final readonly class CompanyResponse
 {
     public int $id;
     public string $name;
+    public ?string $acronym;
     public ?string $tradeName;
+    public ?string $legalName;
+    public ?string $tagline;
+    public ?string $description;
     public ?string $taxId;
     public ?array $address;
     public ?string $phone;
@@ -25,7 +29,11 @@ final readonly class CompanyResponse
     {
         $this->id = $company->getId();
         $this->name = $company->getName();
+        $this->acronym = $company->getAcronym();
         $this->tradeName = $company->getTradeName();
+        $this->legalName = $company->getLegalName();
+        $this->tagline = $company->getTagline();
+        $this->description = $company->getDescription();
         $this->taxId = $company->getTaxId();
         $this->address = $company->getAddress();
         $this->phone = $company->getPhone();

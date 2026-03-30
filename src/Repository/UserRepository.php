@@ -33,14 +33,24 @@ class UserRepository extends ServiceEntityRepository implements PasswordUpgrader
         $this->getEntityManager()->flush();
     }
 
-    public function createPaginatedQueryBuilder(?string $search = null): QueryBuilder
+    public function createPaginatedQueryBuilder(?string $search = null, ?int $roleId = null, ?string $active = null): QueryBuilder
     {
         $qb = $this->createQueryBuilder('u')
             ->select('u');
 
         if ($search !== null && $search !== '') {
-            $qb->andWhere('u.name LIKE :search OR u.email LIKE :search')
+            $qb->andWhere('(u.name LIKE :search OR u.lastName LIKE :search OR u.email LIKE :search OR u.phone LIKE :search)')
                 ->setParameter('search', '%' . $search . '%');
+        }
+
+        if ($roleId !== null) {
+            $qb->andWhere('u.role = :roleId')
+                ->setParameter('roleId', $roleId);
+        }
+
+        if ($active !== null && $active !== '') {
+            $qb->andWhere('u.active = :active')
+                ->setParameter('active', (int)$active);
         }
 
         return $qb;

@@ -54,7 +54,11 @@ final readonly class CompanyService
     {
         $company = new Company();
         $company->setName($request->name);
+        $company->setAcronym($request->acronym);
         $company->setTradeName($request->tradeName);
+        $company->setLegalName($request->legalName);
+        $company->setTagline($request->tagline);
+        $company->setDescription($request->description);
         $company->setTaxId($request->taxId);
         $company->setAddress($request->address);
         $company->setPhone($request->phone);
@@ -76,7 +80,11 @@ final readonly class CompanyService
         }
 
         if ($request->name !== null) $company->setName($request->name);
+        if ($request->acronym !== null) $company->setAcronym($request->acronym);
         if ($request->tradeName !== null) $company->setTradeName($request->tradeName);
+        if ($request->legalName !== null) $company->setLegalName($request->legalName);
+        if ($request->tagline !== null) $company->setTagline($request->tagline);
+        if ($request->description !== null) $company->setDescription($request->description);
         if ($request->taxId !== null) $company->setTaxId($request->taxId);
         if ($request->address !== null) $company->setAddress($request->address);
         if ($request->phone !== null) $company->setPhone($request->phone);

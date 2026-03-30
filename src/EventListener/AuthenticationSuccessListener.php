@@ -47,6 +47,7 @@ final class AuthenticationSuccessListener
             'roles' => $user->getRoles(),
             'roleId' => $user->getRole()?->getId(),
             'roleName' => $user->getRole()?->getName(),
+            'image' => $user->getImage(),
             'active' => $user->isActive(),
         ];
         $event->setData($data);
