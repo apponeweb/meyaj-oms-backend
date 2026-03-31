@@ -35,6 +35,35 @@ class UserSessionRepository extends ServiceEntityRepository
             ->execute();
     }
 
+    /**
+     * Deactivate all active sessions for the same user, IP and user-agent.
+     */
+    public function deactivateByUserAndClient(\App\Entity\User $user, ?string $ipAddress, ?string $userAgent): int
+    {
+        $qb = $this->createQueryBuilder('s')
+            ->update()
+            ->set('s.active', 'false')
+            ->set('s.logoutAt', ':now')
+            ->where('s.user = :user')
+            ->andWhere('s.active = true')
+            ->setParameter('user', $user)
+            ->setParameter('now', new \DateTimeImmutable());
+
+        if ($ipAddress !== null) {
+            $qb->andWhere('s.ipAddress = :ip')->setParameter('ip', $ipAddress);
+        } else {
+            $qb->andWhere('s.ipAddress IS NULL');
+        }
+
+        if ($userAgent !== null) {
+            $qb->andWhere('s.userAgent = :ua')->setParameter('ua', $userAgent);
+        } else {
+            $qb->andWhere('s.userAgent IS NULL');
+        }
+
+        return $qb->getQuery()->execute();
+    }
+
     public function findActiveByToken(string $token): ?UserSession
     {
         return $this->createQueryBuilder('s')

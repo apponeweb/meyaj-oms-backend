@@ -6,6 +6,7 @@ namespace App\EventListener;
 
 use App\Entity\User;
 use App\Entity\UserSession;
+use App\Repository\UserSessionRepository;
 use Doctrine\ORM\EntityManagerInterface;
 use Lexik\Bundle\JWTAuthenticationBundle\Event\AuthenticationSuccessEvent;
 use Symfony\Component\EventDispatcher\Attribute\AsEventListener;
@@ -17,6 +18,7 @@ final class AuthenticationSuccessListener
     public function __construct(
         private readonly EntityManagerInterface $em,
         private readonly RequestStack $requestStack,
+        private readonly UserSessionRepository $sessionRepository,
     ) {
     }
 
@@ -30,13 +32,17 @@ final class AuthenticationSuccessListener
         $data = $event->getData();
         $token = $data['token'] ?? '';
         $request = $this->requestStack->getCurrentRequest();
+        $ipAddress = $request?->getClientIp();
+        $userAgent = $request?->headers->get('User-Agent');
+
+        // Deactivate previous sessions from the same user, IP and browser
+        $this->sessionRepository->deactivateByUserAndClient($user, $ipAddress, $userAgent);
 
         $session = new UserSession();
         $session->setUser($user);
         $session->setToken($token);
-        $session->setIpAddress($request?->getClientIp());
-        $session->setUserAgent($request?->headers->get('User-Agent'));
-
+        $session->setIpAddress($ipAddress);
+        $session->setUserAgent($userAgent);
         $this->em->persist($session);
         $this->em->flush();
 
