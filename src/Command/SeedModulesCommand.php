@@ -31,7 +31,11 @@ class SeedModulesCommand extends Command
         ['code' => 'proveedor', 'name' => 'Proveedores', 'icon' => 'Truck', 'order' => 3],
         ['code' => 'productos', 'name' => 'Productos', 'icon' => 'Package', 'order' => 4],
         ['code' => 'ventas', 'name' => 'Ventas', 'icon' => 'ShoppingCart', 'order' => 5],
-        ['code' => 'reportes', 'name' => 'Reportes', 'icon' => 'BarChart3', 'order' => 6],
+        ['code' => 'almacenes', 'name' => 'Almacenes', 'icon' => 'Warehouse', 'order' => 6],
+        ['code' => 'inventario', 'name' => 'Inventario', 'icon' => 'ClipboardList', 'order' => 7],
+        ['code' => 'compras', 'name' => 'Compras', 'icon' => 'ShoppingBag', 'order' => 8],
+        ['code' => 'pedidos', 'name' => 'Pedidos', 'icon' => 'FileText', 'order' => 9],
+        ['code' => 'reportes', 'name' => 'Reportes', 'icon' => 'BarChart3', 'order' => 10],
     ];
 
     private const FUNCTIONS = [
@@ -65,6 +69,19 @@ class SeedModulesCommand extends Command
         ['module' => 'ventas', 'code' => 'pos', 'name' => 'Punto de venta', 'order' => 1],
         ['module' => 'ventas', 'code' => 'sales', 'name' => 'Historial de ventas', 'order' => 2],
         ['module' => 'ventas', 'code' => 'customers', 'name' => 'Clientes', 'order' => 3],
+        // Almacenes
+        ['module' => 'almacenes', 'code' => 'warehouses', 'name' => 'Bodegas', 'order' => 1],
+        ['module' => 'almacenes', 'code' => 'warehouse_bins', 'name' => 'Ubicaciones', 'order' => 2],
+        // Inventario
+        ['module' => 'inventario', 'code' => 'kardex', 'name' => 'Kardex', 'order' => 1],
+        ['module' => 'inventario', 'code' => 'inventory_counts', 'name' => 'Conteos Físicos', 'order' => 2],
+        ['module' => 'inventario', 'code' => 'inventory_dashboard', 'name' => 'Dashboard Almacén', 'order' => 3],
+        ['module' => 'inventario', 'code' => 'inventory_reasons', 'name' => 'Motivos de Movimiento', 'order' => 4],
+        // Compras
+        ['module' => 'compras', 'code' => 'purchase_orders', 'name' => 'Órdenes de Compra', 'order' => 1],
+        // Pedidos
+        ['module' => 'pedidos', 'code' => 'sales_orders', 'name' => 'Pedidos de Venta', 'order' => 1],
+        ['module' => 'pedidos', 'code' => 'order_tracking', 'name' => 'Seguimiento', 'order' => 2],
         // Reportes
         ['module' => 'reportes', 'code' => 'dashboard', 'name' => 'Dashboard', 'order' => 1],
         ['module' => 'reportes', 'code' => 'daily_reports', 'name' => 'Reportes diarios', 'order' => 2],

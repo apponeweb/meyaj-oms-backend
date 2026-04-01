@@ -30,8 +30,20 @@ final class PacaController extends AbstractController
     {
         $brandId = $httpRequest->query->getInt('brandId') ?: null;
         $supplierId = $httpRequest->query->getInt('supplierId') ?: null;
-        $active = $httpRequest->query->has('active') ? $httpRequest->query->getBoolean('active') : null;
-        return $this->json($this->service->list($p ?? new PaginationRequest(), $brandId, $supplierId, $active));
+        $active = $httpRequest->query->has('active') ? (bool)$httpRequest->query->get('active') : null;
+        $companyId = $httpRequest->query->getInt('companyId') ?: null;
+        $warehouseId = $httpRequest->query->getInt('warehouseId') ?: null;
+        $warehouseBinId = $httpRequest->query->getInt('warehouseBinId') ?: null;
+
+        return $this->json($this->service->list(
+            $p ?? new PaginationRequest(), 
+            $brandId, 
+            $supplierId, 
+            $active,
+            $companyId,
+            $warehouseId,
+            $warehouseBinId
+        ));
     }
 
     #[Route('/{id}', methods: ['GET'], requirements: ['id' => '\d+'])]

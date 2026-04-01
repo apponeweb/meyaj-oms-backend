@@ -21,6 +21,8 @@ final readonly class PacaResponse
     public ?array $fabricType;
     public ?array $sizeProfile;
     public ?array $supplier;
+    public ?array $warehouse;
+    public ?array $warehouseBin;
     public string $purchasePrice;
     public string $sellingPrice;
     public int $stock;
@@ -45,6 +47,8 @@ final readonly class PacaResponse
         $this->fabricType = $p->getFabricType() ? ['id' => $p->getFabricType()->getId(), 'name' => $p->getFabricType()->getName()] : null;
         $this->sizeProfile = $p->getSizeProfile() ? ['id' => $p->getSizeProfile()->getId(), 'name' => $p->getSizeProfile()->getName()] : null;
         $this->supplier = $p->getSupplier() ? ['id' => $p->getSupplier()->getId(), 'name' => $p->getSupplier()->getName()] : null;
+        $this->warehouse = $p->getWarehouse() ? ['id' => $p->getWarehouse()->getId(), 'name' => $p->getWarehouse()->getName(), 'code' => $p->getWarehouse()->getCode()] : null;
+        $this->warehouseBin = $p->getWarehouseBin() ? ['id' => $p->getWarehouseBin()->getId(), 'name' => $p->getWarehouseBin()->getName(), 'code' => $p->getWarehouseBin()->getCode()] : null;
         $this->purchasePrice = $p->getPurchasePrice();
         $this->sellingPrice = $p->getSellingPrice();
         $this->stock = $p->getStock();

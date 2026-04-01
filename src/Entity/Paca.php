@@ -65,6 +65,14 @@ class Paca
     #[ORM\JoinColumn(nullable: true, onDelete: 'SET NULL')]
     private ?Supplier $supplier = null;
 
+    #[ORM\ManyToOne(targetEntity: Warehouse::class)]
+    #[ORM\JoinColumn(nullable: true, onDelete: 'SET NULL')]
+    private ?Warehouse $warehouse = null;
+
+    #[ORM\ManyToOne(targetEntity: WarehouseBin::class)]
+    #[ORM\JoinColumn(nullable: true, onDelete: 'SET NULL')]
+    private ?WarehouseBin $warehouseBin = null;
+
     #[ORM\Column(type: 'decimal', precision: 10, scale: 2)]
     #[Assert\PositiveOrZero]
     private string $purchasePrice = '0.00';
@@ -121,6 +129,12 @@ class Paca
     public function setSizeProfile(?SizeProfile $sizeProfile): static { $this->sizeProfile = $sizeProfile; return $this; }
     public function getSupplier(): ?Supplier { return $this->supplier; }
     public function setSupplier(?Supplier $supplier): static { $this->supplier = $supplier; return $this; }
+
+    public function getWarehouse(): ?Warehouse { return $this->warehouse; }
+    public function setWarehouse(?Warehouse $warehouse): static { $this->warehouse = $warehouse; return $this; }
+
+    public function getWarehouseBin(): ?WarehouseBin { return $this->warehouseBin; }
+    public function setWarehouseBin(?WarehouseBin $warehouseBin): static { $this->warehouseBin = $warehouseBin; return $this; }
     public function getPurchasePrice(): string { return $this->purchasePrice; }
     public function setPurchasePrice(string $purchasePrice): static { $this->purchasePrice = $purchasePrice; return $this; }
     public function getSellingPrice(): string { return $this->sellingPrice; }

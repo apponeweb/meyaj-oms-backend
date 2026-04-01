@@ -24,9 +24,24 @@ final readonly class PacaService
         private Paginator $paginator,
     ) {}
 
-    public function list(PaginationRequest $pagination, ?int $brandId = null, ?int $supplierId = null, ?bool $active = null): PaginatedResponse
-    {
-        $qb = $this->pacaRepository->createPaginatedQueryBuilder($pagination->search, $brandId, $supplierId, $active);
+    public function list(
+        PaginationRequest $pagination, 
+        ?int $brandId = null, 
+        ?int $supplierId = null, 
+        ?bool $active = null,
+        ?int $companyId = null,
+        ?int $warehouseId = null,
+        ?int $warehouseBinId = null
+    ): PaginatedResponse {
+        $qb = $this->pacaRepository->createPaginatedQueryBuilder(
+            $pagination->search, 
+            $brandId, 
+            $supplierId, 
+            $active,
+            $companyId,
+            $warehouseId,
+            $warehouseBinId
+        );
         $result = $this->paginator->paginate($qb, $pagination);
         return new PaginatedResponse(
             data: array_map(static fn (Paca $p) => new PacaResponse($p), $result->data),
@@ -52,7 +67,7 @@ final readonly class PacaService
         $p->setStock($r->stock);
         $p->setPieceCount($r->pieceCount);
         $p->setWeight($r->weight);
-        $this->setRelations($p, $r->brandId, $r->labelId, $r->qualityGradeId, $r->seasonId, $r->genderId, $r->garmentTypeId, $r->fabricTypeId, $r->sizeProfileId, $r->supplierId);
+        $this->setRelations($p, $r->brandId, $r->labelId, $r->qualityGradeId, $r->seasonId, $r->genderId, $r->garmentTypeId, $r->fabricTypeId, $r->sizeProfileId, $r->supplierId, $r->warehouseId, $r->warehouseBinId);
         $this->em->persist($p);
         $this->em->flush();
         return new PacaResponse($p);
@@ -71,7 +86,7 @@ final readonly class PacaService
         if ($r->pieceCount !== null) $p->setPieceCount($r->pieceCount);
         if ($r->weight !== null) $p->setWeight($r->weight);
         if ($r->active !== null) $p->setActive($r->active);
-        $this->setRelations($p, $r->brandId, $r->labelId, $r->qualityGradeId, $r->seasonId, $r->genderId, $r->garmentTypeId, $r->fabricTypeId, $r->sizeProfileId, $r->supplierId);
+        $this->setRelations($p, $r->brandId, $r->labelId, $r->qualityGradeId, $r->seasonId, $r->genderId, $r->garmentTypeId, $r->fabricTypeId, $r->sizeProfileId, $r->supplierId, $r->warehouseId, $r->warehouseBinId);
         $this->em->flush();
         return new PacaResponse($p);
     }
@@ -84,7 +99,7 @@ final readonly class PacaService
         $this->em->flush();
     }
 
-    private function setRelations(Paca $p, ?int $brandId, ?int $labelId, ?int $qualityGradeId, ?int $seasonId, ?int $genderId, ?int $garmentTypeId, ?int $fabricTypeId, ?int $sizeProfileId, ?int $supplierId): void
+    private function setRelations(Paca $p, ?int $brandId, ?int $labelId, ?int $qualityGradeId, ?int $seasonId, ?int $genderId, ?int $garmentTypeId, ?int $fabricTypeId, ?int $sizeProfileId, ?int $supplierId, ?int $warehouseId = null, ?int $warehouseBinId = null): void
     {
         if ($brandId !== null) $p->setBrand($this->em->getRepository(\App\Entity\Brand::class)->find($brandId));
         if ($labelId !== null) $p->setLabel($this->em->getRepository(\App\Entity\LabelCatalog::class)->find($labelId));
@@ -95,5 +110,7 @@ final readonly class PacaService
         if ($fabricTypeId !== null) $p->setFabricType($this->em->getRepository(\App\Entity\FabricType::class)->find($fabricTypeId));
         if ($sizeProfileId !== null) $p->setSizeProfile($this->em->getRepository(\App\Entity\SizeProfile::class)->find($sizeProfileId));
         if ($supplierId !== null) $p->setSupplier($this->em->getRepository(\App\Entity\Supplier::class)->find($supplierId));
+        if ($warehouseId !== null) $p->setWarehouse($this->em->getRepository(\App\Entity\Warehouse::class)->find($warehouseId));
+        if ($warehouseBinId !== null) $p->setWarehouseBin($this->em->getRepository(\App\Entity\WarehouseBin::class)->find($warehouseBinId));
     }
 }
