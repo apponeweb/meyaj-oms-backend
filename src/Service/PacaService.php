@@ -11,6 +11,7 @@ use App\Entity\Paca;
 use App\Pagination\PaginatedResponse;
 use App\Pagination\PaginationRequest;
 use App\Pagination\Paginator;
+use App\Repository\InventoryReservationRepository;
 use App\Repository\PacaRepository;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\HttpFoundation\Request;
@@ -21,6 +22,7 @@ final readonly class PacaService
     public function __construct(
         private EntityManagerInterface $em,
         private PacaRepository $pacaRepository,
+        private InventoryReservationRepository $reservationRepository,
         private Paginator $paginator,
     ) {}
 
@@ -43,8 +45,15 @@ final readonly class PacaService
             $warehouseBinId
         );
         $result = $this->paginator->paginate($qb, $pagination);
+
+        $pacaIds = array_map(static fn (Paca $p) => $p->getId(), $result->data);
+        $reservedMap = $this->reservationRepository->getActiveReservedQuantityByPacaIds($pacaIds);
+
         return new PaginatedResponse(
-            data: array_map(static fn (Paca $p) => new PacaResponse($p), $result->data),
+            data: array_map(static fn (Paca $p) => new PacaResponse(
+                $p,
+                $p->getStock() - ($reservedMap[$p->getId()] ?? 0),
+            ), $result->data),
             meta: $result->meta,
         );
     }
@@ -52,8 +61,9 @@ final readonly class PacaService
     public function show(int $id): PacaResponse
     {
         $p = $this->pacaRepository->find($id);
-        if ($p === null) throw new NotFoundHttpException(sprintf('Paca con ID %d no encontrada.', $id));
-        return new PacaResponse($p);
+        if ($p === null) throw new NotFoundHttpException(\sprintf('Paca con ID %d no encontrada.', $id));
+        $reserved = $this->reservationRepository->getActiveReservedQuantity($p->getId());
+        return new PacaResponse($p, $p->getStock() - $reserved);
     }
 
     public function create(CreatePacaRequest $r): PacaResponse
@@ -67,7 +77,8 @@ final readonly class PacaService
         $p->setStock($r->stock);
         $p->setPieceCount($r->pieceCount);
         $p->setWeight($r->weight);
-        $this->setRelations($p, $r->brandId, $r->labelId, $r->qualityGradeId, $r->seasonId, $r->genderId, $r->garmentTypeId, $r->fabricTypeId, $r->sizeProfileId, $r->supplierId, $r->warehouseId, $r->warehouseBinId);
+        $this->setRelations($p, $r->brandId, $r->labelId, $r->qualityGradeId, $r->seasonId, $r->genderId, $r->garmentTypeId, $r->fabricTypeId, $r->sizeProfileId, $r->supplierId);
+        $this->syncLocations($p, $r->locations ?? []);
         $this->em->persist($p);
         $this->em->flush();
         return new PacaResponse($p);
@@ -86,7 +97,10 @@ final readonly class PacaService
         if ($r->pieceCount !== null) $p->setPieceCount($r->pieceCount);
         if ($r->weight !== null) $p->setWeight($r->weight);
         if ($r->active !== null) $p->setActive($r->active);
-        $this->setRelations($p, $r->brandId, $r->labelId, $r->qualityGradeId, $r->seasonId, $r->genderId, $r->garmentTypeId, $r->fabricTypeId, $r->sizeProfileId, $r->supplierId, $r->warehouseId, $r->warehouseBinId);
+        $this->setRelations($p, $r->brandId, $r->labelId, $r->qualityGradeId, $r->seasonId, $r->genderId, $r->garmentTypeId, $r->fabricTypeId, $r->sizeProfileId, $r->supplierId);
+        if ($r->locations !== null) {
+            $this->syncLocations($p, $r->locations);
+        }
         $this->em->flush();
         return new PacaResponse($p);
     }
@@ -99,7 +113,7 @@ final readonly class PacaService
         $this->em->flush();
     }
 
-    private function setRelations(Paca $p, ?int $brandId, ?int $labelId, ?int $qualityGradeId, ?int $seasonId, ?int $genderId, ?int $garmentTypeId, ?int $fabricTypeId, ?int $sizeProfileId, ?int $supplierId, ?int $warehouseId = null, ?int $warehouseBinId = null): void
+    private function setRelations(Paca $p, ?int $brandId, ?int $labelId, ?int $qualityGradeId, ?int $seasonId, ?int $genderId, ?int $garmentTypeId, ?int $fabricTypeId, ?int $sizeProfileId, ?int $supplierId): void
     {
         if ($brandId !== null) $p->setBrand($this->em->getRepository(\App\Entity\Brand::class)->find($brandId));
         if ($labelId !== null) $p->setLabel($this->em->getRepository(\App\Entity\LabelCatalog::class)->find($labelId));
@@ -110,7 +124,26 @@ final readonly class PacaService
         if ($fabricTypeId !== null) $p->setFabricType($this->em->getRepository(\App\Entity\FabricType::class)->find($fabricTypeId));
         if ($sizeProfileId !== null) $p->setSizeProfile($this->em->getRepository(\App\Entity\SizeProfile::class)->find($sizeProfileId));
         if ($supplierId !== null) $p->setSupplier($this->em->getRepository(\App\Entity\Supplier::class)->find($supplierId));
-        if ($warehouseId !== null) $p->setWarehouse($this->em->getRepository(\App\Entity\Warehouse::class)->find($warehouseId));
-        if ($warehouseBinId !== null) $p->setWarehouseBin($this->em->getRepository(\App\Entity\WarehouseBin::class)->find($warehouseBinId));
+    }
+
+    private function syncLocations(Paca $p, array $locations): void
+    {
+        $p->clearLocations();
+        $this->em->flush();
+
+        foreach ($locations as $loc) {
+            $warehouse = $this->em->getRepository(\App\Entity\Warehouse::class)->find($loc['warehouseId']);
+            if ($warehouse === null) continue;
+
+            $location = new \App\Entity\PacaLocation();
+            $location->setWarehouse($warehouse);
+
+            if (!empty($loc['warehouseBinId'])) {
+                $bin = $this->em->getRepository(\App\Entity\WarehouseBin::class)->find($loc['warehouseBinId']);
+                $location->setWarehouseBin($bin);
+            }
+
+            $p->addLocation($location);
+        }
     }
 }

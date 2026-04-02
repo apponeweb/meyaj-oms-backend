@@ -78,6 +78,7 @@ class SeedModulesCommand extends Command
         ['module' => 'inventario', 'code' => 'inventory_counts', 'name' => 'Conteos Físicos', 'order' => 2],
         ['module' => 'inventario', 'code' => 'inventory_dashboard', 'name' => 'Dashboard Almacén', 'order' => 3],
         ['module' => 'inventario', 'code' => 'inventory_reasons', 'name' => 'Motivos de Movimiento', 'order' => 4],
+        ['module' => 'inventario', 'code' => 'inventory_reservations', 'name' => 'Reservas de Inventario', 'order' => 5],
         // Compras
         ['module' => 'compras', 'code' => 'purchase_orders', 'name' => 'Órdenes de Compra', 'order' => 1],
         // Pedidos

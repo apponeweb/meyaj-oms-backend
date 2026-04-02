@@ -21,18 +21,18 @@ final readonly class PacaResponse
     public ?array $fabricType;
     public ?array $sizeProfile;
     public ?array $supplier;
-    public ?array $warehouse;
-    public ?array $warehouseBin;
+    public array $locations;
     public string $purchasePrice;
     public string $sellingPrice;
     public int $stock;
+    public ?int $availableStock;
     public ?int $pieceCount;
     public ?string $weight;
     public bool $active;
     public string $createdAt;
     public string $updatedAt;
 
-    public function __construct(Paca $p)
+    public function __construct(Paca $p, ?int $availableStock = null)
     {
         $this->id = $p->getId();
         $this->code = $p->getCode();
@@ -47,11 +47,17 @@ final readonly class PacaResponse
         $this->fabricType = $p->getFabricType() ? ['id' => $p->getFabricType()->getId(), 'name' => $p->getFabricType()->getName()] : null;
         $this->sizeProfile = $p->getSizeProfile() ? ['id' => $p->getSizeProfile()->getId(), 'name' => $p->getSizeProfile()->getName()] : null;
         $this->supplier = $p->getSupplier() ? ['id' => $p->getSupplier()->getId(), 'name' => $p->getSupplier()->getName()] : null;
-        $this->warehouse = $p->getWarehouse() ? ['id' => $p->getWarehouse()->getId(), 'name' => $p->getWarehouse()->getName(), 'code' => $p->getWarehouse()->getCode()] : null;
-        $this->warehouseBin = $p->getWarehouseBin() ? ['id' => $p->getWarehouseBin()->getId(), 'name' => $p->getWarehouseBin()->getName(), 'code' => $p->getWarehouseBin()->getCode()] : null;
+        $this->locations = $p->getLocations()->map(static fn (\App\Entity\PacaLocation $loc) => [
+            'id' => $loc->getId(),
+            'warehouseId' => $loc->getWarehouse()->getId(),
+            'warehouseName' => $loc->getWarehouse()->getName(),
+            'warehouseBinId' => $loc->getWarehouseBin()?->getId(),
+            'warehouseBinName' => $loc->getWarehouseBin()?->getName(),
+        ])->toArray();
         $this->purchasePrice = $p->getPurchasePrice();
         $this->sellingPrice = $p->getSellingPrice();
         $this->stock = $p->getStock();
+        $this->availableStock = $availableStock;
         $this->pieceCount = $p->getPieceCount();
         $this->weight = $p->getWeight();
         $this->active = $p->isActive();

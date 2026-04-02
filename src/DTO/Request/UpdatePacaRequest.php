@@ -27,7 +27,7 @@ final readonly class UpdatePacaRequest
         public ?int $pieceCount = null,
         public ?string $weight = null,
         public ?bool $active = null,
-        public ?int $warehouseId = null,
-        public ?int $warehouseBinId = null,
+        /** @var array<array{warehouseId: int, warehouseBinId?: int}>|null */
+        public ?array $locations = null,
     ) {}
 }

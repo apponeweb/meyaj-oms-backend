@@ -56,6 +56,34 @@ class InventoryReservationRepository extends ServiceEntityRepository
             ->getResult();
     }
 
+    /**
+     * @param int[] $pacaIds
+     * @return array<int, int> Map of pacaId => reservedQuantity
+     */
+    public function getActiveReservedQuantityByPacaIds(array $pacaIds): array
+    {
+        if (empty($pacaIds)) {
+            return [];
+        }
+
+        $results = $this->createQueryBuilder('r')
+            ->select('IDENTITY(r.paca) as pacaId, COALESCE(SUM(r.quantity), 0) as reserved')
+            ->andWhere('r.paca IN (:ids)')
+            ->andWhere('r.status = :status')
+            ->setParameter('ids', $pacaIds)
+            ->setParameter('status', 'ACTIVE')
+            ->groupBy('r.paca')
+            ->getQuery()
+            ->getArrayResult();
+
+        $map = [];
+        foreach ($results as $row) {
+            $map[(int) $row['pacaId']] = (int) $row['reserved'];
+        }
+
+        return $map;
+    }
+
     public function getActiveReservedQuantity(int $pacaId): int
     {
         $result = $this->createQueryBuilder('r')

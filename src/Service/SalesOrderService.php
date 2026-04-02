@@ -418,14 +418,16 @@ final readonly class SalesOrderService
         $this->em->flush();
     }
 
-    private function reserveStock(Paca $paca, User $user, int $quantity): void
+    private function reserveStock(Paca $paca, User $user, int $quantity, ?int $salesOrderId = null, ?int $salesOrderItemId = null): void
     {
-        $reservation = new InventoryReservation();
-        $reservation->setPaca($paca);
-        $reservation->setUser($user);
-        $reservation->setQuantity($quantity);
-        $reservation->setStatus('ACTIVE');
-        $this->em->persist($reservation);
+        $this->inventoryManager->reserveStock(
+            paca: $paca,
+            user: $user,
+            quantity: $quantity,
+            salesOrderId: $salesOrderId,
+            salesOrderItemId: $salesOrderItemId,
+            expiresAt: new \DateTimeImmutable('+48 hours'),
+        );
     }
 
     private function fulfillReservation(Paca $paca, int $salesOrderId, int $quantity): void

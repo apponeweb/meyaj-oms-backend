@@ -65,8 +65,6 @@ final readonly class InventoryManager
             $paca->setStock($paca->getStock() - $quantity);
         } else {
             $paca->setStock($paca->getStock() + $quantity);
-            $paca->setWarehouse($warehouse);
-            $paca->setWarehouseBin($bin);
         }
 
         $movement = new InventoryMovement();

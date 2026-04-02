@@ -31,7 +31,7 @@ final readonly class CreatePacaRequest
         public int $stock = 0,
         public ?int $pieceCount = null,
         public ?string $weight = null,
-        public ?int $warehouseId = null,
-        public ?int $warehouseBinId = null,
+        /** @var array<array{warehouseId: int, warehouseBinId?: int}>|null */
+        public ?array $locations = null,
     ) {}
 }

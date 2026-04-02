@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Entity;
 
 use App\Repository\PacaRepository;
+use Doctrine\Common\Collections\ArrayCollection;
+use Doctrine\Common\Collections\Collection;
 use Doctrine\ORM\Mapping as ORM;
 use Symfony\Bridge\Doctrine\Validator\Constraints\UniqueEntity;
 use Symfony\Component\Validator\Constraints as Assert;
@@ -65,13 +67,9 @@ class Paca
     #[ORM\JoinColumn(nullable: true, onDelete: 'SET NULL')]
     private ?Supplier $supplier = null;
 
-    #[ORM\ManyToOne(targetEntity: Warehouse::class)]
-    #[ORM\JoinColumn(nullable: true, onDelete: 'SET NULL')]
-    private ?Warehouse $warehouse = null;
-
-    #[ORM\ManyToOne(targetEntity: WarehouseBin::class)]
-    #[ORM\JoinColumn(nullable: true, onDelete: 'SET NULL')]
-    private ?WarehouseBin $warehouseBin = null;
+    /** @var Collection<int, PacaLocation> */
+    #[ORM\OneToMany(targetEntity: PacaLocation::class, mappedBy: 'paca', cascade: ['persist', 'remove'], orphanRemoval: true)]
+    private Collection $locations;
 
     #[ORM\Column(type: 'decimal', precision: 10, scale: 2)]
     #[Assert\PositiveOrZero]
@@ -102,7 +100,11 @@ class Paca
     #[ORM\Column]
     private \DateTimeImmutable $updatedAt;
 
-    public function __construct() { $this->createdAt = new \DateTimeImmutable(); $this->updatedAt = new \DateTimeImmutable(); }
+    public function __construct() {
+        $this->createdAt = new \DateTimeImmutable();
+        $this->updatedAt = new \DateTimeImmutable();
+        $this->locations = new ArrayCollection();
+    }
 
     public function getId(): ?int { return $this->id; }
     public function getCode(): string { return $this->code; }
@@ -130,11 +132,23 @@ class Paca
     public function getSupplier(): ?Supplier { return $this->supplier; }
     public function setSupplier(?Supplier $supplier): static { $this->supplier = $supplier; return $this; }
 
-    public function getWarehouse(): ?Warehouse { return $this->warehouse; }
-    public function setWarehouse(?Warehouse $warehouse): static { $this->warehouse = $warehouse; return $this; }
+    /** @return Collection<int, PacaLocation> */
+    public function getLocations(): Collection { return $this->locations; }
 
-    public function getWarehouseBin(): ?WarehouseBin { return $this->warehouseBin; }
-    public function setWarehouseBin(?WarehouseBin $warehouseBin): static { $this->warehouseBin = $warehouseBin; return $this; }
+    public function addLocation(PacaLocation $location): static
+    {
+        if (!$this->locations->contains($location)) {
+            $this->locations->add($location);
+            $location->setPaca($this);
+        }
+        return $this;
+    }
+
+    public function clearLocations(): static
+    {
+        $this->locations->clear();
+        return $this;
+    }
     public function getPurchasePrice(): string { return $this->purchasePrice; }
     public function setPurchasePrice(string $purchasePrice): static { $this->purchasePrice = $purchasePrice; return $this; }
     public function getSellingPrice(): string { return $this->sellingPrice; }
