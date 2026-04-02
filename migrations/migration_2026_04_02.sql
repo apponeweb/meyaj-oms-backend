@@ -97,8 +97,30 @@ SELECT 'inventory_reservations', 'Reservas de Inventario', m.id, 1, NOW(), NOW()
 FROM app_module m WHERE m.code = 'inventario'
 ON DUPLICATE KEY UPDATE name = VALUES(name);
 
+-- ── 8. Regenerate ALL Admin permissions ──
+-- Grant access to all modules
+INSERT INTO app_role_module_permission (role_id, app_module_id, can_access, created_at, updated_at)
+SELECT r.id, m.id, 1, NOW(), NOW()
+FROM app_role r
+CROSS JOIN app_module m
+WHERE r.name = 'Administrador'
+  AND NOT EXISTS (
+    SELECT 1 FROM app_role_module_permission rmp
+    WHERE rmp.role_id = r.id AND rmp.app_module_id = m.id
+  );
+
+-- Grant all actions on all functions
+INSERT INTO app_role_action_permission (role_id, app_functionality_id, action_id, is_allowed, created_at, updated_at)
+SELECT r.id, f.id, a.id, 1, NOW(), NOW()
+FROM app_role r
+CROSS JOIN app_functionality f
+CROSS JOIN app_action_catalog a
+WHERE r.name = 'Administrador'
+  AND NOT EXISTS (
+    SELECT 1 FROM app_role_action_permission rap
+    WHERE rap.role_id = r.id AND rap.app_functionality_id = f.id AND rap.action_id = a.id
+  );
+
 -- =================================================================
--- After running this migration, execute:
---   php bin/console app:seed-modules
--- This will auto-assign permissions to the Admin role.
+-- Done. No additional commands needed.
 -- =================================================================
