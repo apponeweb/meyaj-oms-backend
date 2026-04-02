@@ -19,15 +19,25 @@ class WarehouseRepository extends ServiceEntityRepository
         parent::__construct($registry, Warehouse::class);
     }
 
+    public function countAll(): int
+    {
+        return (int) $this->createQueryBuilder('w')
+            ->select('COUNT(w.id)')
+            ->getQuery()
+            ->getSingleScalarResult();
+    }
+
     public function createPaginatedQueryBuilder(
         ?string $search = null,
         ?int $companyId = null,
         ?string $active = null,
-        ?string $warehouseType = null,
+        ?int $warehouseTypeId = null,
     ): QueryBuilder {
         $qb = $this->createQueryBuilder('w')
             ->leftJoin('w.company', 'c')
-            ->addSelect('c');
+            ->addSelect('c')
+            ->leftJoin('w.warehouseType', 'wt')
+            ->addSelect('wt');
 
         if ($search !== null && $search !== '') {
             $qb->andWhere('w.name LIKE :search OR w.code LIKE :search OR c.name LIKE :search')
@@ -44,9 +54,9 @@ class WarehouseRepository extends ServiceEntityRepository
                 ->setParameter('active', $active === '1');
         }
 
-        if ($warehouseType !== null && $warehouseType !== '') {
-            $qb->andWhere('w.warehouseType = :warehouseType')
-                ->setParameter('warehouseType', $warehouseType);
+        if ($warehouseTypeId !== null) {
+            $qb->andWhere('wt.id = :warehouseTypeId')
+                ->setParameter('warehouseTypeId', $warehouseTypeId);
         }
 
         return $qb;

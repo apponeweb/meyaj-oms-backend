@@ -21,8 +21,7 @@ final readonly class CreateWarehouseRequest
         public string $name,
 
         #[Assert\NotBlank]
-        #[Assert\Choice(choices: ['PROPIO', 'EXTERNO', 'TEMPORAL'])]
-        public string $warehouseType = 'PROPIO',
+        public int $warehouseTypeId,
 
         public ?string $address = null,
 

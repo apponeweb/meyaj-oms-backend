@@ -38,10 +38,9 @@ class Warehouse
     #[Assert\Length(min: 2, max: 100)]
     private string $name = '';
 
-    #[ORM\Column(length: 30)]
-    #[Assert\NotBlank]
-    #[Assert\Choice(choices: ['PROPIO', 'EXTERNO', 'TEMPORAL'])]
-    private string $warehouseType = 'PROPIO';
+    #[ORM\ManyToOne(targetEntity: WarehouseType::class, inversedBy: 'warehouses')]
+    #[ORM\JoinColumn(nullable: false)]
+    private WarehouseType $warehouseType;
 
     #[ORM\Column(type: 'text', nullable: true)]
     private ?string $address = null;
@@ -84,8 +83,8 @@ class Warehouse
     public function getName(): string { return $this->name; }
     public function setName(string $name): static { $this->name = $name; return $this; }
 
-    public function getWarehouseType(): string { return $this->warehouseType; }
-    public function setWarehouseType(string $warehouseType): static { $this->warehouseType = $warehouseType; return $this; }
+    public function getWarehouseType(): WarehouseType { return $this->warehouseType; }
+    public function setWarehouseType(WarehouseType $warehouseType): static { $this->warehouseType = $warehouseType; return $this; }
 
     public function getAddress(): ?string { return $this->address; }
     public function setAddress(?string $address): static { $this->address = $address; return $this; }

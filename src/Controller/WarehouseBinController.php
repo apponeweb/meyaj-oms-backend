@@ -36,6 +36,14 @@ final class WarehouseBinController extends AbstractController
         return $this->json($this->binService->list($pagination));
     }
 
+    #[Route('/next-code', methods: ['GET'])]
+    #[OA\Get(summary: 'Obtener el siguiente código sugerido para una ubicación')]
+    #[OA\Response(response: 200, description: 'Código sugerido')]
+    public function nextCode(): JsonResponse
+    {
+        return $this->json(['code' => $this->binService->nextCode()]);
+    }
+
     #[Route('/{id}', methods: ['GET'], requirements: ['id' => '\d+'])]
     #[OA\Get(summary: 'Obtener una ubicación por ID')]
     #[OA\Response(response: 200, description: 'Ubicación encontrada')]

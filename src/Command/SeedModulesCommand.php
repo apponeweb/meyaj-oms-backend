@@ -72,6 +72,7 @@ class SeedModulesCommand extends Command
         // Almacenes
         ['module' => 'almacenes', 'code' => 'warehouses', 'name' => 'Bodegas', 'order' => 1],
         ['module' => 'almacenes', 'code' => 'warehouse_bins', 'name' => 'Ubicaciones', 'order' => 2],
+        ['module' => 'almacenes', 'code' => 'warehouse_types', 'name' => 'Tipos de Bodega', 'order' => 3],
         // Inventario
         ['module' => 'inventario', 'code' => 'kardex', 'name' => 'Kardex', 'order' => 1],
         ['module' => 'inventario', 'code' => 'inventory_counts', 'name' => 'Conteos Físicos', 'order' => 2],

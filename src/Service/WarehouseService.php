@@ -30,7 +30,7 @@ final readonly class WarehouseService
             search: $pagination->search,
             companyId: $pagination->companyId,
             active: $pagination->active,
-            warehouseType: $pagination->warehouseType ?? null,
+            warehouseTypeId: $pagination->warehouseTypeId ?? null,
         );
 
         $result = $this->paginator->paginate($qb, $pagination, fetchJoinCollection: false);
@@ -53,6 +53,12 @@ final readonly class WarehouseService
         return new WarehouseResponse($warehouse);
     }
 
+    public function nextCode(): string
+    {
+        $nextNumber = $this->warehouseRepository->countAll() + 1;
+        return \sprintf('BOD-%03d', $nextNumber);
+    }
+
     public function create(CreateWarehouseRequest $request): WarehouseResponse
     {
         $company = $this->em->getRepository(\App\Entity\Company::class)->find($request->companyId);
@@ -60,11 +66,16 @@ final readonly class WarehouseService
             throw new NotFoundHttpException(sprintf('Empresa con ID %d no encontrada.', $request->companyId));
         }
 
+        $warehouseType = $this->em->getRepository(\App\Entity\WarehouseType::class)->find($request->warehouseTypeId);
+        if ($warehouseType === null) {
+            throw new NotFoundHttpException(\sprintf('Tipo de bodega con ID %d no encontrado.', $request->warehouseTypeId));
+        }
+
         $warehouse = new Warehouse();
         $warehouse->setCompany($company);
         $warehouse->setCode($request->code);
         $warehouse->setName($request->name);
-        $warehouse->setWarehouseType($request->warehouseType);
+        $warehouse->setWarehouseType($warehouseType);
         $warehouse->setAddress($request->address);
         $warehouse->setMonthlyCost($request->monthlyCost);
         $warehouse->setIsExternal($request->isExternal);
@@ -90,9 +101,16 @@ final readonly class WarehouseService
             $warehouse->setCompany($company);
         }
 
+        if ($request->warehouseTypeId !== null) {
+            $warehouseType = $this->em->getRepository(\App\Entity\WarehouseType::class)->find($request->warehouseTypeId);
+            if ($warehouseType === null) {
+                throw new NotFoundHttpException(\sprintf('Tipo de bodega con ID %d no encontrado.', $request->warehouseTypeId));
+            }
+            $warehouse->setWarehouseType($warehouseType);
+        }
+
         if ($request->code !== null) $warehouse->setCode($request->code);
         if ($request->name !== null) $warehouse->setName($request->name);
-        if ($request->warehouseType !== null) $warehouse->setWarehouseType($request->warehouseType);
         if ($request->address !== null) $warehouse->setAddress($request->address);
         if ($request->monthlyCost !== null) $warehouse->setMonthlyCost($request->monthlyCost);
         if ($request->isExternal !== null) $warehouse->setIsExternal($request->isExternal);

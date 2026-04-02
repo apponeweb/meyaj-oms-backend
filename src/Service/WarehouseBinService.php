@@ -52,6 +52,12 @@ final readonly class WarehouseBinService
         return new WarehouseBinResponse($bin);
     }
 
+    public function nextCode(): string
+    {
+        $nextNumber = $this->binRepository->countAll() + 1;
+        return \sprintf('UBI-%03d', $nextNumber);
+    }
+
     public function create(CreateWarehouseBinRequest $request): WarehouseBinResponse
     {
         $warehouse = $this->em->getRepository(\App\Entity\Warehouse::class)->find($request->warehouseId);

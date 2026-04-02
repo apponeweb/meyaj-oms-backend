@@ -19,6 +19,14 @@ class WarehouseBinRepository extends ServiceEntityRepository
         parent::__construct($registry, WarehouseBin::class);
     }
 
+    public function countAll(): int
+    {
+        return (int) $this->createQueryBuilder('b')
+            ->select('COUNT(b.id)')
+            ->getQuery()
+            ->getSingleScalarResult();
+    }
+
     public function createPaginatedQueryBuilder(
         ?string $search = null,
         ?int $warehouseId = null,

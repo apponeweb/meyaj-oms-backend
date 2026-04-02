@@ -25,6 +25,11 @@ SELECT 'warehouse_bins', 'Ubicaciones', m.id, 1, NOW(), NOW()
 FROM app_module m WHERE m.code = 'almacenes'
 ON DUPLICATE KEY UPDATE name = VALUES(name);
 
+INSERT INTO app_function (code, name, app_module_id, is_active, created_at, updated_at)
+SELECT 'warehouse_types', 'Tipos de Bodega', m.id, 1, NOW(), NOW()
+FROM app_module m WHERE m.code = 'almacenes'
+ON DUPLICATE KEY UPDATE name = VALUES(name);
+
 -- Inventario module
 INSERT INTO app_function (code, name, app_module_id, is_active, created_at, updated_at)
 SELECT 'kardex', 'Kardex', m.id, 1, NOW(), NOW()
@@ -72,6 +77,13 @@ ON DUPLICATE KEY UPDATE name = VALUES(name);
 INSERT INTO app_function (code, name, app_module_id, is_active, created_at, updated_at)
 SELECT 'purchase_reports', 'Reportes de Compras', m.id, 1, NOW(), NOW()
 FROM app_module m WHERE m.code = 'reportes'
+ON DUPLICATE KEY UPDATE name = VALUES(name);
+
+-- ── Seed WarehouseType catalog ──
+INSERT INTO warehouse_type (name, description, is_active, created_at, updated_at) VALUES
+('Propio',   'Bodega propia de la empresa',            1, NOW(), NOW()),
+('Externo',  'Bodega externa o de terceros',            1, NOW(), NOW()),
+('Temporal', 'Bodega temporal para almacenamiento corto', 1, NOW(), NOW())
 ON DUPLICATE KEY UPDATE name = VALUES(name);
 
 -- ── Seed InventoryReason catalog ──

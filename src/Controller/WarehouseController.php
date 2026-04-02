@@ -36,6 +36,14 @@ final class WarehouseController extends AbstractController
         return $this->json($this->warehouseService->list($pagination));
     }
 
+    #[Route('/next-code', methods: ['GET'])]
+    #[OA\Get(summary: 'Obtener el siguiente código sugerido para una bodega')]
+    #[OA\Response(response: 200, description: 'Código sugerido')]
+    public function nextCode(): JsonResponse
+    {
+        return $this->json(['code' => $this->warehouseService->nextCode()]);
+    }
+
     #[Route('/{id}', methods: ['GET'], requirements: ['id' => '\d+'])]
     #[OA\Get(summary: 'Obtener una bodega por ID')]
     #[OA\Response(response: 200, description: 'Bodega encontrada')]

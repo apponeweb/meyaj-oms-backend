@@ -26,7 +26,7 @@ final readonly class PaginationRequest
         public ?int $companyId = null,
         public ?int $branchId = null,
         public ?int $departmentId = null,
-        public ?string $warehouseType = null,
+        public ?int $warehouseTypeId = null,
         public ?int $warehouseId = null,
         public ?int $pacaId = null,
         public ?string $movementType = null,

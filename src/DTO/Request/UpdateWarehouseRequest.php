@@ -17,8 +17,7 @@ final readonly class UpdateWarehouseRequest
         #[Assert\Length(min: 2, max: 100)]
         public ?string $name = null,
 
-        #[Assert\Choice(choices: ['PROPIO', 'EXTERNO', 'TEMPORAL'])]
-        public ?string $warehouseType = null,
+        public ?int $warehouseTypeId = null,
 
         public ?string $address = null,
 
