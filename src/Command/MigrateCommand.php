@@ -91,7 +91,7 @@ class MigrateCommand extends Command
 
         // Check if warehouse still has old string column
         $columns = array_map(
-            fn ($col) => $col->getName(),
+            fn($col) => $col->getName(),
             $conn->createSchemaManager()->listTableColumns('warehouse')
         );
 
@@ -137,7 +137,6 @@ class MigrateCommand extends Command
     {
         $tables = $conn->createSchemaManager()->listTableNames();
 
-        // Create paca_location if not exists
         if (!in_array('paca_location', $tables, true)) {
             $io->info('Creating paca_location table...');
             $conn->executeStatement('
@@ -160,7 +159,7 @@ class MigrateCommand extends Command
 
         // Check if paca still has old columns
         $columns = array_map(
-            fn ($col) => $col->getName(),
+            fn($col) => $col->getName(),
             $conn->createSchemaManager()->listTableColumns('paca')
         );
 
