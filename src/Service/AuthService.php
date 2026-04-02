@@ -36,7 +36,7 @@ final readonly class AuthService
         $user->setEmail($request->email);
         $user->setPassword($this->passwordHasher->hashPassword($user, $request->password));
 
-        $adminRole = $this->roleRepository->findOneBy(['name' => 'Admin']);
+        $adminRole = $this->roleRepository->find(1);
         if ($adminRole !== null) {
             $user->setRole($adminRole);
         }
