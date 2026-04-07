@@ -90,6 +90,28 @@ final class InventoryCountController extends AbstractController
         return $this->json($this->countService->finalizeCount($id, $user));
     }
 
+    #[Route('/{id}/start-recount', methods: ['POST'], requirements: ['id' => '\d+'])]
+    #[OA\Post(summary: 'Iniciar reconteo de un conteo completado con discrepancias')]
+    #[OA\Response(response: 200, description: 'Reconteo iniciado')]
+    #[OA\Response(response: 400, description: 'No hay discrepancias para recontar')]
+    #[OA\Response(response: 409, description: 'El conteo no está en estado COMPLETED')]
+    public function startRecount(int $id): JsonResponse
+    {
+        return $this->json($this->countService->startRecount($id));
+    }
+
+    #[Route('/{id}/finalize-recount', methods: ['POST'], requirements: ['id' => '\d+'])]
+    #[OA\Post(summary: 'Finalizar reconteo y aplicar ajustes')]
+    #[OA\Response(response: 200, description: 'Reconteo finalizado')]
+    #[OA\Response(response: 400, description: 'No todos los detalles ajustados han sido recontados')]
+    #[OA\Response(response: 409, description: 'El conteo no está en estado RECOUNT')]
+    public function finalizeRecount(int $id): JsonResponse
+    {
+        /** @var User $user */
+        $user = $this->getUser();
+        return $this->json($this->countService->finalizeRecount($id, $user));
+    }
+
     #[Route('/{id}', methods: ['DELETE'], requirements: ['id' => '\d+'])]
     #[OA\Delete(summary: 'Eliminar un conteo en estado DRAFT')]
     #[OA\Response(response: 204, description: 'Conteo eliminado')]

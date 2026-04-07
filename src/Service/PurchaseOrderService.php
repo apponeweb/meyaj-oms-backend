@@ -13,6 +13,7 @@ use App\Entity\Company;
 use App\Entity\InventoryReason;
 use App\Entity\LabelCatalog;
 use App\Entity\Paca;
+use App\Entity\PacaLocation;
 use App\Entity\PurchaseOrder;
 use App\Entity\PurchaseOrderItem;
 use App\Entity\Supplier;
@@ -273,8 +274,11 @@ final readonly class PurchaseOrderService
                         $paca->setPurchasePrice($item->getUnitPrice());
                         $paca->setSellingPrice($item->getUnitPrice());
                         $paca->setStock(0); // Se actualiza via InventoryManager
-                        $paca->setWarehouse($warehouse);
                         $paca->setSupplier($po->getSupplier());
+
+                        $location = new PacaLocation();
+                        $location->setWarehouse($warehouse);
+                        $paca->addLocation($location);
 
                         if ($item->getLabel() !== null) {
                             $paca->setLabel($item->getLabel());

@@ -41,6 +41,15 @@ class InventoryCountDetail
     #[ORM\Column(nullable: true)]
     private ?\DateTimeImmutable $countedAt = null;
 
+    #[ORM\Column(nullable: true)]
+    private ?int $firstCountedQty = null;
+
+    #[ORM\Column(nullable: true)]
+    private ?int $firstDifference = null;
+
+    #[ORM\Column(nullable: true)]
+    private ?\DateTimeImmutable $firstCountedAt = null;
+
     public function getId(): ?int { return $this->id; }
 
     public function getInventoryCount(): InventoryCount { return $this->inventoryCount; }
@@ -66,4 +75,13 @@ class InventoryCountDetail
 
     public function getCountedAt(): ?\DateTimeImmutable { return $this->countedAt; }
     public function setCountedAt(?\DateTimeImmutable $countedAt): static { $this->countedAt = $countedAt; return $this; }
+
+    public function getFirstCountedQty(): ?int { return $this->firstCountedQty; }
+    public function setFirstCountedQty(?int $firstCountedQty): static { $this->firstCountedQty = $firstCountedQty; return $this; }
+
+    public function getFirstDifference(): ?int { return $this->firstDifference; }
+    public function setFirstDifference(?int $firstDifference): static { $this->firstDifference = $firstDifference; return $this; }
+
+    public function getFirstCountedAt(): ?\DateTimeImmutable { return $this->firstCountedAt; }
+    public function setFirstCountedAt(?\DateTimeImmutable $firstCountedAt): static { $this->firstCountedAt = $firstCountedAt; return $this; }
 }

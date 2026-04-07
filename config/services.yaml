@@ -30,3 +30,7 @@ services:
     App\Controller\SessionController:
         arguments:
             $sessionTimeoutMinutes: '%app.session_timeout_minutes%'
+
+    App\Service\PacaExcelService:
+        arguments:
+            $importDir: '%kernel.project_dir%/var/imports'

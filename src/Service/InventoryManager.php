@@ -48,11 +48,14 @@ final readonly class InventoryManager
         ?int $referenceId = null,
         ?string $unitCost = null,
         ?string $notes = null,
+        bool $forceAdjustment = false,
     ): InventoryMovement {
         $movementType = $reason->getDirection();
 
+        $actualQty = $quantity;
+
         if ($movementType === 'OUT') {
-            if ($paca->getStock() < $quantity) {
+            if (!$forceAdjustment && $paca->getStock() < $quantity) {
                 throw new ConflictHttpException(
                     sprintf(
                         'Stock insuficiente para paca %s. Stock actual: %d, requerido: %d',
@@ -62,9 +65,13 @@ final readonly class InventoryManager
                     ),
                 );
             }
-            $paca->setStock($paca->getStock() - $quantity);
+            if ($forceAdjustment && $paca->getStock() < $quantity) {
+                $actualQty = $paca->getStock();
+                $notes = sprintf('%s [Stock insuficiente: se ajustaron %d de %d unidades]', $notes ?? '', $actualQty, $quantity);
+            }
+            $paca->setStock($paca->getStock() - $actualQty);
         } else {
-            $paca->setStock($paca->getStock() + $quantity);
+            $paca->setStock($paca->getStock() + $actualQty);
         }
 
         $movement = new InventoryMovement();
@@ -77,8 +84,8 @@ final readonly class InventoryManager
         $movement->setMovementType($movementType);
         $movement->setReferenceType($referenceType);
         $movement->setReferenceId($referenceId);
-        $movement->setQtyIn($movementType === 'IN' ? $quantity : 0);
-        $movement->setQtyOut($movementType === 'OUT' ? $quantity : 0);
+        $movement->setQtyIn($movementType === 'IN' ? $actualQty : 0);
+        $movement->setQtyOut($movementType === 'OUT' ? $actualQty : 0);
         $movement->setBalanceAfter($paca->getStock());
         $movement->setUnitCost($unitCost);
         $movement->setNotes($notes);

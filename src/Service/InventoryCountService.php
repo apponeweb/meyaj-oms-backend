@@ -111,11 +111,15 @@ final readonly class InventoryCountService
             throw new ConflictHttpException('Solo se pueden iniciar conteos en estado DRAFT.');
         }
 
-        // Find all active pacas in the warehouse
-        $pacas = $this->em->getRepository(Paca::class)->findBy([
-            'warehouse' => $count->getWarehouse(),
-            'active' => true,
-        ]);
+        // Find all active pacas in the warehouse (via PacaLocation)
+        $pacas = $this->em->getRepository(Paca::class)
+            ->createQueryBuilder('p')
+            ->innerJoin('p.locations', 'loc')
+            ->where('loc.warehouse = :warehouse')
+            ->andWhere('p.active = true')
+            ->setParameter('warehouse', $count->getWarehouse())
+            ->getQuery()
+            ->getResult();
 
         foreach ($pacas as $paca) {
             $detail = new InventoryCountDetail();
@@ -147,8 +151,8 @@ final readonly class InventoryCountService
             throw new NotFoundHttpException(sprintf('Conteo de inventario con ID %d no encontrado.', $countId));
         }
 
-        if ($count->getStatus() !== 'IN_PROGRESS') {
-            throw new ConflictHttpException('Solo se pueden actualizar detalles de conteos EN PROGRESO.');
+        if ($count->getStatus() !== 'IN_PROGRESS' && $count->getStatus() !== 'RECOUNT') {
+            throw new ConflictHttpException('Solo se pueden actualizar detalles de conteos EN PROGRESO o en RECONTEO.');
         }
 
         $detail = null;
@@ -166,7 +170,7 @@ final readonly class InventoryCountService
         if ($countedQty !== null) {
             $detail->setCountedQty($countedQty);
             $detail->setDifference($countedQty - $detail->getSystemQty());
-            $detail->setStatus('COUNTED');
+            $detail->setStatus($count->getStatus() === 'RECOUNT' ? 'RECOUNTED' : 'COUNTED');
             $detail->setCountedAt(new \DateTimeImmutable());
         }
 
@@ -229,6 +233,7 @@ final readonly class InventoryCountService
                         referenceType: 'INVENTORY_COUNT',
                         referenceId: $count->getId(),
                         notes: sprintf('Ajuste por conteo físico %s', $count->getFolio()),
+                        forceAdjustment: true,
                     );
                 } elseif ($diff < 0 && $adjustmentOut !== null) {
                     $this->inventoryManager->recordMovement(
@@ -241,6 +246,7 @@ final readonly class InventoryCountService
                         referenceType: 'INVENTORY_COUNT',
                         referenceId: $count->getId(),
                         notes: sprintf('Ajuste por conteo físico %s', $count->getFolio()),
+                        forceAdjustment: true,
                     );
                 }
             }
@@ -260,6 +266,150 @@ final readonly class InventoryCountService
             'count' => new InventoryCountResponse($count),
             'details' => $details,
         ];
+    }
+
+    public function startRecount(int $id): array
+    {
+        $count = $this->countRepository->find($id);
+        if ($count === null) {
+            throw new NotFoundHttpException(sprintf('Conteo de inventario con ID %d no encontrado.', $id));
+        }
+
+        if ($count->getStatus() !== 'COMPLETED') {
+            throw new ConflictHttpException('Solo se pueden recontar conteos en estado COMPLETADO.');
+        }
+
+        if ($count->getDiscrepancies() === 0) {
+            throw new BadRequestHttpException('No hay discrepancias para recontar.');
+        }
+
+        // Preserve first count values for adjusted items
+        foreach ($count->getDetails() as $detail) {
+            if ($detail->getStatus() === 'ADJUSTED') {
+                $detail->setFirstCountedQty($detail->getCountedQty());
+                $detail->setFirstDifference($detail->getDifference());
+                $detail->setFirstCountedAt($detail->getCountedAt());
+            }
+        }
+
+        $count->setStatus('RECOUNT');
+        $this->em->flush();
+
+        $details = array_map(
+            static fn (InventoryCountDetail $d) => new InventoryCountDetailResponse($d),
+            $count->getDetails()->toArray(),
+        );
+
+        return [
+            'count' => new InventoryCountResponse($count),
+            'details' => $details,
+        ];
+    }
+
+    public function finalizeRecount(int $countId, User $user): array
+    {
+        $count = $this->countRepository->find($countId);
+        if ($count === null) {
+            throw new NotFoundHttpException(sprintf('Conteo de inventario con ID %d no encontrado.', $countId));
+        }
+
+        if ($count->getStatus() !== 'RECOUNT') {
+            throw new ConflictHttpException('Solo se pueden finalizar reconteos en estado RECOUNT.');
+        }
+
+        $adjustmentIn = $this->em->getRepository(InventoryReason::class)->findOneBy(['code' => 'ADJUSTMENT_IN']);
+        $adjustmentOut = $this->em->getRepository(InventoryReason::class)->findOneBy(['code' => 'ADJUSTMENT_OUT']);
+
+        $warnings = [];
+
+        foreach ($count->getDetails() as $detail) {
+            if ($detail->getStatus() !== 'RECOUNTED') {
+                continue;
+            }
+
+            $firstCounted = $detail->getFirstCountedQty();
+            $recounted = $detail->getCountedQty();
+
+            if ($firstCounted === null || $recounted === null) {
+                continue;
+            }
+
+            $correction = $recounted - $firstCounted;
+
+            if ($correction !== 0) {
+                $paca = $detail->getPaca();
+                $warehouse = $count->getWarehouse();
+                $stockBefore = $paca->getStock();
+
+                if ($correction > 0 && $adjustmentIn !== null) {
+                    $this->inventoryManager->recordMovement(
+                        paca: $paca,
+                        warehouse: $warehouse,
+                        bin: null,
+                        reason: $adjustmentIn,
+                        user: $user,
+                        quantity: abs($correction),
+                        referenceType: 'INVENTORY_COUNT',
+                        referenceId: $count->getId(),
+                        notes: sprintf('Corrección por reconteo %s (1er: %d, 2do: %d)', $count->getFolio(), $firstCounted, $recounted),
+                        forceAdjustment: true,
+                    );
+                } elseif ($correction < 0 && $adjustmentOut !== null) {
+                    $requiredOut = abs($correction);
+                    if ($stockBefore < $requiredOut) {
+                        $warnings[] = sprintf(
+                            '%s: se requería ajustar -%d pero solo había %d en stock (se ajustó a 0)',
+                            $paca->getCode(),
+                            $requiredOut,
+                            $stockBefore,
+                        );
+                    }
+                    $this->inventoryManager->recordMovement(
+                        paca: $paca,
+                        warehouse: $warehouse,
+                        bin: null,
+                        reason: $adjustmentOut,
+                        user: $user,
+                        quantity: $requiredOut,
+                        referenceType: 'INVENTORY_COUNT',
+                        referenceId: $count->getId(),
+                        notes: sprintf('Corrección por reconteo %s (1er: %d, 2do: %d)', $count->getFolio(), $firstCounted, $recounted),
+                        forceAdjustment: true,
+                    );
+                }
+            }
+        }
+
+        // Count remaining discrepancies: items that still have difference != 0
+        $discrepancies = 0;
+        foreach ($count->getDetails() as $detail) {
+            if (in_array($detail->getStatus(), ['ADJUSTED', 'RECOUNTED'], true)) {
+                $diff = $detail->getDifference();
+                if ($diff !== null && $diff !== 0) {
+                    $discrepancies++;
+                }
+            }
+        }
+
+        $count->setDiscrepancies($discrepancies);
+        $count->setStatus('COMPLETED');
+        $this->em->flush();
+
+        $details = array_map(
+            static fn (InventoryCountDetail $d) => new InventoryCountDetailResponse($d),
+            $count->getDetails()->toArray(),
+        );
+
+        $result = [
+            'count' => new InventoryCountResponse($count),
+            'details' => $details,
+        ];
+
+        if (!empty($warnings)) {
+            $result['warnings'] = $warnings;
+        }
+
+        return $result;
     }
 
     public function delete(int $id): void
