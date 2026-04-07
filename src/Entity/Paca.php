@@ -149,6 +149,18 @@ class Paca
         $this->locations->clear();
         return $this;
     }
+
+    public function getWarehouse(): ?Warehouse
+    {
+        $first = $this->locations->first();
+        return $first ? $first->getWarehouse() : null;
+    }
+
+    public function getWarehouseBin(): ?WarehouseBin
+    {
+        $first = $this->locations->first();
+        return $first ? $first->getWarehouseBin() : null;
+    }
     public function getPurchasePrice(): string { return $this->purchasePrice; }
     public function setPurchasePrice(string $purchasePrice): static { $this->purchasePrice = $purchasePrice; return $this; }
     public function getSellingPrice(): string { return $this->sellingPrice; }
