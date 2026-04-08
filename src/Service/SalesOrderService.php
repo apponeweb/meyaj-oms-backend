@@ -200,8 +200,9 @@ final readonly class SalesOrderService
             $history->setNotes('Pedido creado');
             $so->addStatusHistory($history);
 
-            // Auto-confirm POS sales
+            // Auto-confirm POS sales and immediately dispatch
             if ($request->channel === SalesOrder::CHANNEL_POS) {
+                // PENDING → CONFIRMED
                 $so->setStatus(SalesOrder::STATUS_CONFIRMED);
                 $confirmHistory = new SalesOrderStatusHistory();
                 $confirmHistory->setUser($currentUser);
@@ -209,6 +210,65 @@ final readonly class SalesOrderService
                 $confirmHistory->setToStatus(SalesOrder::STATUS_CONFIRMED);
                 $confirmHistory->setNotes('Auto-confirmado (venta POS)');
                 $so->addStatusHistory($confirmHistory);
+
+                // CONFIRMED → SHIPPED (immediate dispatch for POS)
+                $so->setStatus(SalesOrder::STATUS_SHIPPED);
+                $so->setDeliveryStatus(SalesOrder::DELIVERY_SHIPPED);
+                $shippedHistory = new SalesOrderStatusHistory();
+                $shippedHistory->setUser($currentUser);
+                $shippedHistory->setFromStatus(SalesOrder::STATUS_CONFIRMED);
+                $shippedHistory->setToStatus(SalesOrder::STATUS_SHIPPED);
+                $shippedHistory->setNotes('Despacho inmediato (venta POS)');
+                $so->addStatusHistory($shippedHistory);
+
+                // SHIPPED → DELIVERED
+                $so->setStatus(SalesOrder::STATUS_DELIVERED);
+                $so->setDeliveryStatus(SalesOrder::DELIVERY_DELIVERED);
+                $so->setDeliveredAt(new \DateTimeImmutable());
+                $deliveredHistory = new SalesOrderStatusHistory();
+                $deliveredHistory->setUser($currentUser);
+                $deliveredHistory->setFromStatus(SalesOrder::STATUS_SHIPPED);
+                $deliveredHistory->setToStatus(SalesOrder::STATUS_DELIVERED);
+                $deliveredHistory->setNotes('Entrega inmediata (venta POS)');
+                $so->addStatusHistory($deliveredHistory);
+
+                // Discount inventory: mark units as SOLD and record kardex
+                $saleReason = $this->em->getRepository(InventoryReason::class)
+                    ->findOneBy(['code' => 'SALE']);
+
+                $units = $this->em->getRepository(PacaUnit::class)->findBy([
+                    'salesOrder' => $so,
+                    'status' => PacaUnit::STATUS_RESERVED,
+                ]);
+
+                $grouped = [];
+                foreach ($units as $unit) {
+                    $unit->setStatus(PacaUnit::STATUS_SOLD);
+                    $key = $unit->getPaca()->getId() . '-' . $unit->getWarehouse()->getId();
+                    if (!isset($grouped[$key])) {
+                        $grouped[$key] = ['paca' => $unit->getPaca(), 'warehouse' => $unit->getWarehouse(), 'count' => 0];
+                    }
+                    $grouped[$key]['count']++;
+                }
+
+                if ($saleReason !== null) {
+                    foreach ($grouped as $group) {
+                        $this->inventoryManager->recordMovement(
+                            paca: $group['paca'],
+                            warehouse: $group['warehouse'],
+                            bin: null,
+                            reason: $saleReason,
+                            user: $currentUser,
+                            quantity: $group['count'],
+                            referenceType: 'sales_order',
+                            referenceId: $so->getId(),
+                            notes: sprintf('Venta POS %s - %s', $so->getFolio(), $group['paca']->getCode()),
+                        );
+                    }
+                }
+
+                // Mark payment as PAID for POS
+                $so->setPaymentStatus(SalesOrder::PAYMENT_PAID);
             }
 
             $this->em->flush();
