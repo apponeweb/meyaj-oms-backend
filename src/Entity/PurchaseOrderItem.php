@@ -30,6 +30,10 @@ class PurchaseOrderItem
     #[ORM\JoinColumn(nullable: true, onDelete: 'SET NULL')]
     private ?LabelCatalog $label = null;
 
+    #[ORM\ManyToOne(targetEntity: Paca::class)]
+    #[ORM\JoinColumn(nullable: true, onDelete: 'SET NULL')]
+    private ?Paca $paca = null;
+
     #[ORM\Column(length: 255)]
     #[Assert\NotBlank]
     #[Assert\Length(max: 255)]
@@ -65,6 +69,9 @@ class PurchaseOrderItem
 
     public function getLabel(): ?LabelCatalog { return $this->label; }
     public function setLabel(?LabelCatalog $label): static { $this->label = $label; return $this; }
+
+    public function getPaca(): ?Paca { return $this->paca; }
+    public function setPaca(?Paca $paca): static { $this->paca = $paca; return $this; }
 
     public function getDescription(): string { return $this->description; }
     public function setDescription(string $description): static { $this->description = $description; return $this; }

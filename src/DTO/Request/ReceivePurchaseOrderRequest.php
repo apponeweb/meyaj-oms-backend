@@ -12,6 +12,8 @@ final readonly class ReceivePurchaseOrderRequest
         #[Assert\NotBlank]
         public int $warehouseId,
 
+        public ?int $warehouseBinId = null,
+
         #[Assert\NotBlank]
         #[Assert\Count(min: 1, minMessage: 'Debe incluir al menos un artículo a recibir.')]
         /** @var array<array{itemId: int, receivedQty: int, notes?: string}> */

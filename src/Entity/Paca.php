@@ -67,10 +67,6 @@ class Paca
     #[ORM\JoinColumn(nullable: true, onDelete: 'SET NULL')]
     private ?Supplier $supplier = null;
 
-    /** @var Collection<int, PacaLocation> */
-    #[ORM\OneToMany(targetEntity: PacaLocation::class, mappedBy: 'paca', cascade: ['persist', 'remove'], orphanRemoval: true)]
-    private Collection $locations;
-
     #[ORM\Column(type: 'decimal', precision: 10, scale: 2)]
     #[Assert\PositiveOrZero]
     private string $purchasePrice = '0.00';
@@ -81,7 +77,7 @@ class Paca
 
     #[ORM\Column]
     #[Assert\PositiveOrZero]
-    private int $stock = 0;
+    private int $cachedStock = 0;
 
     #[ORM\Column(nullable: true)]
     #[Assert\Positive]
@@ -100,10 +96,14 @@ class Paca
     #[ORM\Column]
     private \DateTimeImmutable $updatedAt;
 
+    /** @var Collection<int, PacaUnit> */
+    #[ORM\OneToMany(targetEntity: PacaUnit::class, mappedBy: 'paca')]
+    private Collection $units;
+
     public function __construct() {
         $this->createdAt = new \DateTimeImmutable();
         $this->updatedAt = new \DateTimeImmutable();
-        $this->locations = new ArrayCollection();
+        $this->units = new ArrayCollection();
     }
 
     public function getId(): ?int { return $this->id; }
@@ -131,42 +131,18 @@ class Paca
     public function setSizeProfile(?SizeProfile $sizeProfile): static { $this->sizeProfile = $sizeProfile; return $this; }
     public function getSupplier(): ?Supplier { return $this->supplier; }
     public function setSupplier(?Supplier $supplier): static { $this->supplier = $supplier; return $this; }
-
-    /** @return Collection<int, PacaLocation> */
-    public function getLocations(): Collection { return $this->locations; }
-
-    public function addLocation(PacaLocation $location): static
-    {
-        if (!$this->locations->contains($location)) {
-            $this->locations->add($location);
-            $location->setPaca($this);
-        }
-        return $this;
-    }
-
-    public function clearLocations(): static
-    {
-        $this->locations->clear();
-        return $this;
-    }
-
-    public function getWarehouse(): ?Warehouse
-    {
-        $first = $this->locations->first();
-        return $first ? $first->getWarehouse() : null;
-    }
-
-    public function getWarehouseBin(): ?WarehouseBin
-    {
-        $first = $this->locations->first();
-        return $first ? $first->getWarehouseBin() : null;
-    }
     public function getPurchasePrice(): string { return $this->purchasePrice; }
     public function setPurchasePrice(string $purchasePrice): static { $this->purchasePrice = $purchasePrice; return $this; }
     public function getSellingPrice(): string { return $this->sellingPrice; }
     public function setSellingPrice(string $sellingPrice): static { $this->sellingPrice = $sellingPrice; return $this; }
-    public function getStock(): int { return $this->stock; }
-    public function setStock(int $stock): static { $this->stock = $stock; return $this; }
+    public function getCachedStock(): int { return $this->cachedStock; }
+    public function setCachedStock(int $cachedStock): static { $this->cachedStock = $cachedStock; return $this; }
+
+    /** @deprecated Use getCachedStock() - kept for backward compatibility during migration */
+    public function getStock(): int { return $this->cachedStock; }
+    /** @deprecated Use setCachedStock() - kept for backward compatibility during migration */
+    public function setStock(int $stock): static { $this->cachedStock = $stock; return $this; }
+
     public function getPieceCount(): ?int { return $this->pieceCount; }
     public function setPieceCount(?int $pieceCount): static { $this->pieceCount = $pieceCount; return $this; }
     public function getWeight(): ?string { return $this->weight; }
@@ -176,4 +152,7 @@ class Paca
     public function getCreatedAt(): \DateTimeImmutable { return $this->createdAt; }
     public function getUpdatedAt(): \DateTimeImmutable { return $this->updatedAt; }
     #[ORM\PreUpdate] public function setUpdatedAtValue(): void { $this->updatedAt = new \DateTimeImmutable(); }
+
+    /** @return Collection<int, PacaUnit> */
+    public function getUnits(): Collection { return $this->units; }
 }

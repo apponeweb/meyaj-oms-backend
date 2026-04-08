@@ -52,6 +52,13 @@ final class PacaController extends AbstractController
         ));
     }
 
+    #[Route('/next-code', methods: ['GET'])]
+    #[OA\Get(summary: 'Obtener el siguiente codigo de paca disponible')]
+    public function nextCode(): JsonResponse
+    {
+        return $this->json($this->service->getNextCode());
+    }
+
     #[Route('/{id}', methods: ['GET'], requirements: ['id' => '\d+'])]
     #[OA\Get(summary: 'Obtener paca')]
     public function show(int $id): JsonResponse { return $this->json($this->service->show($id)); }
@@ -71,6 +78,24 @@ final class PacaController extends AbstractController
     #[OA\Delete(summary: 'Eliminar paca')]
     public function delete(int $id): JsonResponse
     { $this->service->delete($id); return $this->json(null, Response::HTTP_NO_CONTENT); }
+
+    #[Route('/{id}/add-stock', methods: ['POST'], requirements: ['id' => '\d+'])]
+    #[OA\Post(summary: 'Agregar stock directo a una paca')]
+    #[OA\Response(response: 200, description: 'Stock agregado')]
+    public function addStock(int $id, Request $request): JsonResponse
+    {
+        $payload = json_decode($request->getContent(), true, 512, \JSON_THROW_ON_ERROR);
+        $warehouseId = (int) ($payload['warehouseId'] ?? 0);
+        $warehouseBinId = isset($payload['warehouseBinId']) ? (int) $payload['warehouseBinId'] : null;
+        $quantity = (int) ($payload['quantity'] ?? 0);
+
+        if ($warehouseId <= 0 || $quantity <= 0) {
+            return $this->json(['error' => ['message' => 'warehouseId y quantity son requeridos']], Response::HTTP_BAD_REQUEST);
+        }
+
+        $result = $this->service->addStock($id, $warehouseId, $warehouseBinId, $quantity, $this->getUser());
+        return $this->json($result);
+    }
 
     // ── Excel Export ─────────────────────────────────────────────────
 

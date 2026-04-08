@@ -33,10 +33,11 @@ class PacaRepository extends ServiceEntityRepository
             ->leftJoin('p.fabricType', 'ft')->addSelect('ft')
             ->leftJoin('p.sizeProfile', 'sp')->addSelect('sp')
             ->leftJoin('p.supplier', 'su')->addSelect('su')
-            ->leftJoin('p.locations', 'loc')
-            ->leftJoin('loc.warehouse', 'w')
+            ->leftJoin('App\\Entity\\PacaUnit', 'pu', 'WITH', 'pu.paca = p')
+            ->leftJoin('pu.warehouse', 'w')
             ->leftJoin('w.company', 'c')
-            ->leftJoin('loc.warehouseBin', 'bin');
+            ->leftJoin('pu.warehouseBin', 'bin')
+            ->groupBy('p.id');
 
         if ($search !== null && $search !== '') {
             $qb->andWhere('p.name LIKE :search OR p.code LIKE :search')
@@ -47,15 +48,12 @@ class PacaRepository extends ServiceEntityRepository
         if ($active !== null) $qb->andWhere('p.active = :active')->setParameter('active', $active);
         if ($companyId !== null) {
             $qb->andWhere('c.id = :companyId')->setParameter('companyId', $companyId);
-            $qb->distinct();
         }
         if ($warehouseId !== null) {
             $qb->andWhere('w.id = :warehouseId')->setParameter('warehouseId', $warehouseId);
-            $qb->distinct();
         }
         if ($warehouseBinId !== null) {
             $qb->andWhere('bin.id = :warehouseBinId')->setParameter('warehouseBinId', $warehouseBinId);
-            $qb->distinct();
         }
 
         return $qb;

@@ -66,6 +66,11 @@ final readonly class PurchaseOrderDetailResponse
                 'id' => $item->getLabel()->getId(),
                 'name' => $item->getLabel()->getName(),
             ] : null,
+            'paca' => $item->getPaca() ? [
+                'id' => $item->getPaca()->getId(),
+                'code' => $item->getPaca()->getCode(),
+                'name' => $item->getPaca()->getName(),
+            ] : null,
             'notes' => $item->getNotes(),
         ], $po->getItems()->toArray());
         $this->createdAt = $po->getCreatedAt()->format(\DateTimeInterface::ATOM);

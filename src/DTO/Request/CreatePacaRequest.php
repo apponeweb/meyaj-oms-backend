@@ -9,8 +9,8 @@ use Symfony\Component\Validator\Constraints as Assert;
 final readonly class CreatePacaRequest
 {
     public function __construct(
-        #[Assert\NotBlank] #[Assert\Length(min: 2, max: 50)]
-        public string $code,
+        #[Assert\Length(max: 50)]
+        public string $code = '',
         #[Assert\NotBlank] #[Assert\Length(min: 2, max: 255)]
         public string $name,
         public ?string $description = null,
@@ -27,11 +27,7 @@ final readonly class CreatePacaRequest
         public string $purchasePrice = '0.00',
         #[Assert\PositiveOrZero]
         public string $sellingPrice = '0.00',
-        #[Assert\PositiveOrZero]
-        public int $stock = 0,
         public ?int $pieceCount = null,
         public ?string $weight = null,
-        /** @var array<array{warehouseId: int, warehouseBinId?: int}>|null */
-        public ?array $locations = null,
     ) {}
 }

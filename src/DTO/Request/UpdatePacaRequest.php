@@ -23,11 +23,8 @@ final readonly class UpdatePacaRequest
         public ?int $supplierId = null,
         public ?string $purchasePrice = null,
         public ?string $sellingPrice = null,
-        public ?int $stock = null,
         public ?int $pieceCount = null,
         public ?string $weight = null,
         public ?bool $active = null,
-        /** @var array<array{warehouseId: int, warehouseBinId?: int}>|null */
-        public ?array $locations = null,
     ) {}
 }

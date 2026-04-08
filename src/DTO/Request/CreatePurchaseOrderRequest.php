@@ -26,7 +26,7 @@ final readonly class CreatePurchaseOrderRequest
 
         #[Assert\NotBlank]
         #[Assert\Count(min: 1, minMessage: 'Debe incluir al menos un artículo.')]
-        /** @var array<array{description: string, expectedQty: int, unitPrice: string, labelId?: int}> */
+        /** @var array<array{description: string, expectedQty: int, unitPrice: string, labelId?: int, pacaId?: int}> */
         public array $items = [],
     ) {}
 }

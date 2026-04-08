@@ -13,8 +13,10 @@ use App\Entity\InventoryCount;
 use App\Entity\InventoryCountDetail;
 use App\Entity\InventoryReason;
 use App\Entity\Paca;
+use App\Entity\PacaUnit;
 use App\Entity\User;
 use App\Entity\Warehouse;
+use App\Repository\PacaUnitRepository;
 use App\Pagination\PaginatedResponse;
 use App\Pagination\PaginationRequest;
 use App\Pagination\Paginator;
@@ -29,6 +31,7 @@ final readonly class InventoryCountService
     public function __construct(
         private EntityManagerInterface $em,
         private InventoryCountRepository $countRepository,
+        private PacaUnitRepository $pacaUnitRepo,
         private InventoryManager $inventoryManager,
         private Paginator $paginator,
     ) {
@@ -111,20 +114,25 @@ final readonly class InventoryCountService
             throw new ConflictHttpException('Solo se pueden iniciar conteos en estado DRAFT.');
         }
 
-        // Find all active pacas in the warehouse (via PacaLocation)
+        // Find all active pacas in the warehouse (via PacaUnit)
         $pacas = $this->em->getRepository(Paca::class)
             ->createQueryBuilder('p')
-            ->innerJoin('p.locations', 'loc')
-            ->where('loc.warehouse = :warehouse')
+            ->innerJoin('App\Entity\PacaUnit', 'pu', 'WITH', 'pu.paca = p')
+            ->where('pu.warehouse = :warehouse')
+            ->andWhere('pu.status IN (:statuses)')
             ->andWhere('p.active = true')
             ->setParameter('warehouse', $count->getWarehouse())
+            ->setParameter('statuses', ['AVAILABLE', 'RESERVED'])
+            ->groupBy('p.id')
             ->getQuery()
             ->getResult();
 
         foreach ($pacas as $paca) {
             $detail = new InventoryCountDetail();
             $detail->setPaca($paca);
-            $detail->setSystemQty($paca->getStock());
+            $detail->setSystemQty(
+                $this->pacaUnitRepo->countByPacaAndWarehouseForCount($paca->getId(), $count->getWarehouse()->getId())
+            );
             $count->addDetail($detail);
         }
 
@@ -223,6 +231,15 @@ final readonly class InventoryCountService
                 $warehouse = $count->getWarehouse();
 
                 if ($diff > 0 && $adjustmentIn !== null) {
+                    // Surplus: create new PacaUnits
+                    $existingCount = $this->em->getRepository(PacaUnit::class)->count(['paca' => $paca]);
+                    for ($i = 0; $i < abs($diff); $i++) {
+                        $unit = new PacaUnit();
+                        $unit->setSerial(sprintf('%s-%04d', $paca->getCode(), $existingCount + $i + 1));
+                        $unit->setPaca($paca);
+                        $unit->setWarehouse($warehouse);
+                        $this->em->persist($unit);
+                    }
                     $this->inventoryManager->recordMovement(
                         paca: $paca,
                         warehouse: $warehouse,
@@ -236,6 +253,15 @@ final readonly class InventoryCountService
                         forceAdjustment: true,
                     );
                 } elseif ($diff < 0 && $adjustmentOut !== null) {
+                    // Shortage: mark PacaUnits as DAMAGED
+                    $unitsToMark = $this->pacaUnitRepo->findAvailableInWarehouse(
+                        $paca->getId(),
+                        $warehouse->getId(),
+                        abs($diff),
+                    );
+                    foreach ($unitsToMark as $unit) {
+                        $unit->setStatus(PacaUnit::STATUS_DAMAGED);
+                    }
                     $this->inventoryManager->recordMovement(
                         paca: $paca,
                         warehouse: $warehouse,
@@ -342,6 +368,15 @@ final readonly class InventoryCountService
                 $stockBefore = $paca->getStock();
 
                 if ($correction > 0 && $adjustmentIn !== null) {
+                    // Surplus: create new PacaUnits
+                    $existingCount = $this->em->getRepository(PacaUnit::class)->count(['paca' => $paca]);
+                    for ($i = 0; $i < abs($correction); $i++) {
+                        $unit = new PacaUnit();
+                        $unit->setSerial(sprintf('%s-%04d', $paca->getCode(), $existingCount + $i + 1));
+                        $unit->setPaca($paca);
+                        $unit->setWarehouse($warehouse);
+                        $this->em->persist($unit);
+                    }
                     $this->inventoryManager->recordMovement(
                         paca: $paca,
                         warehouse: $warehouse,
@@ -356,12 +391,22 @@ final readonly class InventoryCountService
                     );
                 } elseif ($correction < 0 && $adjustmentOut !== null) {
                     $requiredOut = abs($correction);
-                    if ($stockBefore < $requiredOut) {
+                    // Shortage: mark PacaUnits as DAMAGED
+                    $unitsToMark = $this->pacaUnitRepo->findAvailableInWarehouse(
+                        $paca->getId(),
+                        $warehouse->getId(),
+                        $requiredOut,
+                    );
+                    foreach ($unitsToMark as $unit) {
+                        $unit->setStatus(PacaUnit::STATUS_DAMAGED);
+                    }
+                    if (count($unitsToMark) < $requiredOut) {
                         $warnings[] = sprintf(
-                            '%s: se requería ajustar -%d pero solo había %d en stock (se ajustó a 0)',
+                            '%s: se requería ajustar -%d pero solo había %d disponibles (se ajustaron %d)',
                             $paca->getCode(),
                             $requiredOut,
-                            $stockBefore,
+                            count($unitsToMark),
+                            count($unitsToMark),
                         );
                     }
                     $this->inventoryManager->recordMovement(

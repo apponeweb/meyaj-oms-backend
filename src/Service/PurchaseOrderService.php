@@ -13,12 +13,13 @@ use App\Entity\Company;
 use App\Entity\InventoryReason;
 use App\Entity\LabelCatalog;
 use App\Entity\Paca;
-use App\Entity\PacaLocation;
+use App\Entity\PacaUnit;
 use App\Entity\PurchaseOrder;
 use App\Entity\PurchaseOrderItem;
 use App\Entity\Supplier;
 use App\Entity\User;
 use App\Entity\Warehouse;
+use App\Entity\WarehouseBin;
 use App\Pagination\PaginatedResponse;
 use App\Pagination\PaginationRequest;
 use App\Pagination\Paginator;
@@ -65,7 +66,8 @@ final readonly class PurchaseOrderService
             ->leftJoin('po.user', 'u')
             ->leftJoin('po.items', 'i')
             ->leftJoin('i.label', 'l')
-            ->addSelect('s', 'c', 'u', 'i', 'l')
+            ->leftJoin('i.paca', 'p')
+            ->addSelect('s', 'c', 'u', 'i', 'l', 'p')
             ->where('po.id = :id')
             ->setParameter('id', $id)
             ->getQuery()
@@ -94,7 +96,7 @@ final readonly class PurchaseOrderService
         $po->setCompany($company);
         $po->setSupplier($supplier);
         $po->setUser($user);
-        $po->setFolio($this->folioGenerator->generate('PO', PurchaseOrder::class));
+        $po->setFolio($this->folioGenerator->generateWithDate('OC', PurchaseOrder::class));
         $po->setOrderDate(new \DateTime($request->orderDate));
 
         if ($request->expectedDate !== null) {
@@ -118,6 +120,16 @@ final readonly class PurchaseOrderService
                 $label = $this->em->find(LabelCatalog::class, $itemData['labelId']);
                 if ($label !== null) {
                     $item->setLabel($label);
+                }
+            }
+
+            if (isset($itemData['pacaId'])) {
+                $paca = $this->em->find(Paca::class, $itemData['pacaId']);
+                if ($paca !== null) {
+                    $item->setPaca($paca);
+                    if ($item->getDescription() === '' || $item->getDescription() === $itemData['description']) {
+                        $item->setDescription($paca->getName());
+                    }
                 }
             }
 
@@ -185,7 +197,8 @@ final readonly class PurchaseOrderService
             ->leftJoin('po.user', 'u')
             ->leftJoin('po.items', 'i')
             ->leftJoin('i.label', 'l')
-            ->addSelect('s', 'c', 'u', 'i', 'l')
+            ->leftJoin('i.paca', 'p')
+            ->addSelect('s', 'c', 'u', 'i', 'l', 'p')
             ->where('po.id = :id')
             ->setParameter('id', $id)
             ->getQuery()
@@ -202,6 +215,11 @@ final readonly class PurchaseOrderService
         $warehouse = $this->em->find(Warehouse::class, $request->warehouseId);
         if ($warehouse === null) {
             throw new NotFoundHttpException(sprintf('Bodega con ID %d no encontrada.', $request->warehouseId));
+        }
+
+        $warehouseBin = null;
+        if ($request->warehouseBinId !== null) {
+            $warehouseBin = $this->em->find(WarehouseBin::class, $request->warehouseBinId);
         }
 
         $purchaseReason = $this->em->getRepository(InventoryReason::class)->findOneBy(['code' => 'PURCHASE']);
@@ -247,17 +265,14 @@ final readonly class PurchaseOrderService
 
                 // Solo crear paca si hay nuevas unidades recibidas
                 if ($newQtyToReceive > 0) {
-                    $pacaCode = sprintf('PO-%s-%04d', $po->getFolio(), $item->getId());
+                    $linkedPaca = $item->getPaca();
 
-                    // Buscar si ya existe una paca para este item (recepción parcial previa)
-                    $existingPaca = $this->em->getRepository(Paca::class)->findOneBy(['code' => $pacaCode]);
-
-                    if ($existingPaca !== null) {
-                        // Actualizar paca existente via InventoryManager
+                    if ($linkedPaca !== null) {
+                        // Usar la paca vinculada al item
                         $this->inventoryManager->recordMovement(
-                            paca: $existingPaca,
+                            paca: $linkedPaca,
                             warehouse: $warehouse,
-                            bin: null,
+                            bin: $warehouseBin,
                             reason: $purchaseReason,
                             user: $user,
                             quantity: $newQtyToReceive,
@@ -266,40 +281,101 @@ final readonly class PurchaseOrderService
                             unitCost: $item->getUnitPrice(),
                             notes: sprintf('Recepción de OC %s - %s', $po->getFolio(), $item->getDescription()),
                         );
-                    } else {
-                        // Crear nueva paca
-                        $paca = new Paca();
-                        $paca->setCode($pacaCode);
-                        $paca->setName($item->getDescription());
-                        $paca->setPurchasePrice($item->getUnitPrice());
-                        $paca->setSellingPrice($item->getUnitPrice());
-                        $paca->setStock(0); // Se actualiza via InventoryManager
-                        $paca->setSupplier($po->getSupplier());
 
-                        $location = new PacaLocation();
-                        $location->setWarehouse($warehouse);
-                        $paca->addLocation($location);
-
-                        if ($item->getLabel() !== null) {
-                            $paca->setLabel($item->getLabel());
+                        // Create individual PacaUnit records
+                        $existingCount = $this->em->getRepository(PacaUnit::class)
+                            ->count(['paca' => $linkedPaca]);
+                        for ($i = 0; $i < $newQtyToReceive; $i++) {
+                            $unit = new PacaUnit();
+                            $unit->setSerial(sprintf('%s-%04d', $linkedPaca->getCode(), $existingCount + $i + 1));
+                            $unit->setPaca($linkedPaca);
+                            $unit->setWarehouse($warehouse);
+                            if ($warehouseBin !== null) {
+                                $unit->setWarehouseBin($warehouseBin);
+                            }
+                            $this->em->persist($unit);
                         }
+                    } else {
+                        $pacaCode = sprintf('OC-%s-%04d', $po->getFolio(), $item->getId());
 
-                        $this->em->persist($paca);
-                        $this->em->flush(); // Flush para obtener ID antes del movimiento
+                        // Buscar si ya existe una paca para este item (recepción parcial previa)
+                        $existingPaca = $this->em->getRepository(Paca::class)->findOneBy(['code' => $pacaCode]);
 
-                        // Registrar movimiento de entrada
-                        $this->inventoryManager->recordMovement(
-                            paca: $paca,
-                            warehouse: $warehouse,
-                            bin: null,
-                            reason: $purchaseReason,
-                            user: $user,
-                            quantity: $newQtyToReceive,
-                            referenceType: 'purchase_order',
-                            referenceId: $po->getId(),
-                            unitCost: $item->getUnitPrice(),
-                            notes: sprintf('Recepción de OC %s - %s', $po->getFolio(), $item->getDescription()),
-                        );
+                        if ($existingPaca !== null) {
+                            // Actualizar paca existente via InventoryManager
+                            $this->inventoryManager->recordMovement(
+                                paca: $existingPaca,
+                                warehouse: $warehouse,
+                                bin: $warehouseBin,
+                                reason: $purchaseReason,
+                                user: $user,
+                                quantity: $newQtyToReceive,
+                                referenceType: 'purchase_order',
+                                referenceId: $po->getId(),
+                                unitCost: $item->getUnitPrice(),
+                                notes: sprintf('Recepción de OC %s - %s', $po->getFolio(), $item->getDescription()),
+                            );
+
+                            // Create individual PacaUnit records
+                            $existingCount = $this->em->getRepository(PacaUnit::class)
+                                ->count(['paca' => $existingPaca]);
+                            for ($i = 0; $i < $newQtyToReceive; $i++) {
+                                $unit = new PacaUnit();
+                                $unit->setSerial(sprintf('%s-%04d', $existingPaca->getCode(), $existingCount + $i + 1));
+                                $unit->setPaca($existingPaca);
+                                $unit->setWarehouse($warehouse);
+                                $unit->setPurchaseOrder($po);
+                                if ($warehouseBin !== null) {
+                                    $unit->setWarehouseBin($warehouseBin);
+                                }
+                                $this->em->persist($unit);
+                            }
+                        } else {
+                            // Crear nueva paca
+                            $paca = new Paca();
+                            $paca->setCode($pacaCode);
+                            $paca->setName($item->getDescription());
+                            $paca->setPurchasePrice($item->getUnitPrice());
+                            $paca->setSellingPrice($item->getUnitPrice());
+                            $paca->setCachedStock(0); // Se actualiza via InventoryManager
+                            $paca->setSupplier($po->getSupplier());
+
+                            if ($item->getLabel() !== null) {
+                                $paca->setLabel($item->getLabel());
+                            }
+
+                            $this->em->persist($paca);
+                            $this->em->flush(); // Flush para obtener ID antes del movimiento
+
+                            // Registrar movimiento de entrada
+                            $this->inventoryManager->recordMovement(
+                                paca: $paca,
+                                warehouse: $warehouse,
+                                bin: $warehouseBin,
+                                reason: $purchaseReason,
+                                user: $user,
+                                quantity: $newQtyToReceive,
+                                referenceType: 'purchase_order',
+                                referenceId: $po->getId(),
+                                unitCost: $item->getUnitPrice(),
+                                notes: sprintf('Recepción de OC %s - %s', $po->getFolio(), $item->getDescription()),
+                            );
+
+                            // Create individual PacaUnit records
+                            $existingCount = $this->em->getRepository(PacaUnit::class)
+                                ->count(['paca' => $paca]);
+                            for ($i = 0; $i < $newQtyToReceive; $i++) {
+                                $unit = new PacaUnit();
+                                $unit->setSerial(sprintf('%s-%04d', $paca->getCode(), $existingCount + $i + 1));
+                                $unit->setPaca($paca);
+                                $unit->setWarehouse($warehouse);
+                                $unit->setPurchaseOrder($po);
+                                if ($warehouseBin !== null) {
+                                    $unit->setWarehouseBin($warehouseBin);
+                                }
+                                $this->em->persist($unit);
+                            }
+                        }
                     }
                 }
             }

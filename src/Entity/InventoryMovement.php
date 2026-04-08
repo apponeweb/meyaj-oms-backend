@@ -13,6 +13,7 @@ use Doctrine\ORM\Mapping as ORM;
 #[ORM\Index(columns: ['warehouse_id'], name: 'idx_movement_warehouse')]
 #[ORM\Index(columns: ['created_at'], name: 'idx_movement_date')]
 #[ORM\Index(columns: ['reference_type', 'reference_id'], name: 'idx_movement_reference')]
+#[ORM\Index(columns: ['paca_unit_id'], name: 'idx_movement_paca_unit')]
 class InventoryMovement
 {
     #[ORM\Id]
@@ -68,6 +69,10 @@ class InventoryMovement
     #[ORM\Column(type: 'text', nullable: true)]
     private ?string $notes = null;
 
+    #[ORM\ManyToOne(targetEntity: PacaUnit::class)]
+    #[ORM\JoinColumn(nullable: true, onDelete: 'SET NULL')]
+    private ?PacaUnit $pacaUnit = null;
+
     #[ORM\Column]
     private \DateTimeImmutable $createdAt;
 
@@ -119,6 +124,9 @@ class InventoryMovement
 
     public function getNotes(): ?string { return $this->notes; }
     public function setNotes(?string $notes): static { $this->notes = $notes; return $this; }
+
+    public function getPacaUnit(): ?PacaUnit { return $this->pacaUnit; }
+    public function setPacaUnit(?PacaUnit $pacaUnit): static { $this->pacaUnit = $pacaUnit; return $this; }
 
     public function getCreatedAt(): \DateTimeImmutable { return $this->createdAt; }
 }

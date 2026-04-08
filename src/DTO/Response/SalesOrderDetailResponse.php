@@ -37,7 +37,10 @@ final readonly class SalesOrderDetailResponse
     public string $createdAt;
     public string $updatedAt;
 
-    public function __construct(SalesOrder $so)
+    /**
+     * @param array<int, array<array{id: int, serial: string, warehouseId: int, warehouseName: string, status: string}>> $unitsByItem
+     */
+    public function __construct(SalesOrder $so, array $unitsByItem = [])
     {
         $this->id = $so->getId();
         $this->company = [
@@ -85,6 +88,7 @@ final readonly class SalesOrderDetailResponse
             'discount' => $item->getDiscount(),
             'totalPrice' => $item->getTotalPrice(),
             'notes' => $item->getNotes(),
+            'units' => $unitsByItem[$item->getId()] ?? [],
         ], $so->getItems()->toArray());
         $this->statusHistory = array_map(static fn (SalesOrderStatusHistory $h) => [
             'id' => $h->getId(),

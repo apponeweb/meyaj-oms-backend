@@ -149,12 +149,17 @@ class SalesOrder
     #[ORM\OneToMany(targetEntity: SalesOrderStatusHistory::class, mappedBy: 'salesOrder', cascade: ['persist', 'remove'])]
     private Collection $statusHistory;
 
+    /** @var Collection<int, ShipmentOrder> */
+    #[ORM\OneToMany(targetEntity: ShipmentOrder::class, mappedBy: 'salesOrder')]
+    private Collection $shipments;
+
     public function __construct()
     {
         $this->createdAt = new \DateTimeImmutable();
         $this->updatedAt = new \DateTimeImmutable();
         $this->items = new ArrayCollection();
         $this->statusHistory = new ArrayCollection();
+        $this->shipments = new ArrayCollection();
     }
 
     public function getId(): ?int { return $this->id; }
@@ -252,6 +257,9 @@ class SalesOrder
 
     /** @return Collection<int, SalesOrderStatusHistory> */
     public function getStatusHistory(): Collection { return $this->statusHistory; }
+
+    /** @return Collection<int, ShipmentOrder> */
+    public function getShipments(): Collection { return $this->shipments; }
 
     public function addStatusHistory(SalesOrderStatusHistory $history): static
     {
