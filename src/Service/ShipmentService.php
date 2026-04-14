@@ -253,7 +253,7 @@ final readonly class ShipmentService
             $sh->setShippedAt(new \DateTimeImmutable());
 
             $saleReason = $this->em->getRepository(InventoryReason::class)
-                ->findOneBy(['code' => 'SALE']);
+                ->findOneBy(['code' => InventoryReason::CODE_SALE]);
 
             // Dispatch all scanned units and group for inventory movements
             $grouped = [];
@@ -373,7 +373,7 @@ final readonly class ShipmentService
 
             if ($currentStatus === ShipmentOrder::STATUS_SHIPPED) {
                 $returnReason = $this->em->getRepository(InventoryReason::class)
-                    ->findOneBy(['code' => 'RETURN']);
+                    ->findOneBy(['code' => InventoryReason::CODE_RETURN]);
 
                 $grouped = [];
                 foreach ($sh->getItems() as $item) {

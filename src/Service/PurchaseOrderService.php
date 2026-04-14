@@ -222,7 +222,7 @@ final readonly class PurchaseOrderService
             $warehouseBin = $this->em->find(WarehouseBin::class, $request->warehouseBinId);
         }
 
-        $purchaseReason = $this->em->getRepository(InventoryReason::class)->findOneBy(['code' => 'PURCHASE']);
+        $purchaseReason = $this->em->getRepository(InventoryReason::class)->findOneBy(['code' => InventoryReason::CODE_PURCHASE]);
         if ($purchaseReason === null) {
             throw new BadRequestHttpException('No se encontró el motivo de inventario PURCHASE. Ejecute el seed de datos.');
         }

@@ -15,6 +15,23 @@ use Symfony\Component\Validator\Constraints as Assert;
 #[UniqueEntity(fields: ['code'], message: 'Este código de motivo ya existe')]
 class InventoryReason
 {
+    public const CODE_PURCHASE     = 'PURCHASE';
+    public const CODE_SALE         = 'SALE';
+    public const CODE_RETURN       = 'RETURN';
+    public const CODE_LOSS         = 'LOSS';
+    public const CODE_TRANSFER_IN  = 'TRANSFER_IN';
+    public const CODE_TRANSFER_OUT = 'TRANSFER_OUT';
+    public const CODE_ADJ_IN       = 'ADJUSTMENT_IN';
+    public const CODE_ADJ_OUT      = 'ADJUSTMENT_OUT';
+    public const CODE_PHYSICAL     = 'PHYSICAL_RECEIPT';
+
+    /** Códigos que el sistema usa internamente y no pueden modificarse */
+    public const SYSTEM_CODES = [
+        self::CODE_PURCHASE,
+        self::CODE_SALE,
+        self::CODE_RETURN,
+    ];
+
     #[ORM\Id]
     #[ORM\GeneratedValue]
     #[ORM\Column]

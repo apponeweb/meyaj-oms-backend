@@ -13,6 +13,7 @@ use App\Pagination\PaginationRequest;
 use App\Pagination\Paginator;
 use App\Repository\InventoryReasonRepository;
 use Doctrine\ORM\EntityManagerInterface;
+use Symfony\Component\HttpKernel\Exception\BadRequestHttpException;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 
 final readonly class InventoryReasonService
@@ -73,7 +74,14 @@ final readonly class InventoryReasonService
             throw new NotFoundHttpException(sprintf('Motivo de inventario con ID %d no encontrado.', $id));
         }
 
-        if ($request->code !== null) $reason->setCode($request->code);
+        if ($request->code !== null && $request->code !== $reason->getCode()) {
+            if (in_array($reason->getCode(), InventoryReason::SYSTEM_CODES, true)) {
+                throw new BadRequestHttpException(
+                    sprintf('El motivo "%s" es de sistema y su código no puede modificarse.', $reason->getCode())
+                );
+            }
+            $reason->setCode($request->code);
+        }
         if ($request->name !== null) $reason->setName($request->name);
         if ($request->direction !== null) $reason->setDirection($request->direction);
         if ($request->requiresReference !== null) $reason->setRequiresReference($request->requiresReference);
@@ -89,6 +97,11 @@ final readonly class InventoryReasonService
         $reason = $this->reasonRepository->find($id);
         if ($reason === null) {
             throw new NotFoundHttpException(sprintf('Motivo de inventario con ID %d no encontrado.', $id));
+        }
+        if (in_array($reason->getCode(), InventoryReason::SYSTEM_CODES, true)) {
+            throw new BadRequestHttpException(
+                sprintf('El motivo "%s" es de sistema y no puede eliminarse.', $reason->getCode())
+            );
         }
         $this->em->remove($reason);
         $this->em->flush();

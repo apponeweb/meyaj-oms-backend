@@ -234,7 +234,7 @@ final readonly class SalesOrderService
 
                 // Discount inventory: mark units as SOLD and record kardex
                 $saleReason = $this->em->getRepository(InventoryReason::class)
-                    ->findOneBy(['code' => 'SALE']);
+                    ->findOneBy(['code' => InventoryReason::CODE_SALE]);
 
                 $units = $this->em->getRepository(PacaUnit::class)->findBy([
                     'salesOrder' => $so,
@@ -340,7 +340,7 @@ final readonly class SalesOrderService
             // Inventory side-effects (SHIPPED/DELIVERED now handled by ShipmentService)
             if ($newStatus === SalesOrder::STATUS_SHIPPED) {
                 $saleReason = $this->em->getRepository(InventoryReason::class)
-                    ->findOneBy(['code' => 'SALE']);
+                    ->findOneBy(['code' => InventoryReason::CODE_SALE]);
 
                 // Get all reserved/picked units for this order, grouped by paca+warehouse
                 $units = $this->em->getRepository(PacaUnit::class)->findBy([
@@ -400,7 +400,7 @@ final readonly class SalesOrderService
 
             if ($newStatus === SalesOrder::STATUS_CANCELLED) {
                 $returnReason = $this->em->getRepository(InventoryReason::class)
-                    ->findOneBy(['code' => 'RETURN']);
+                    ->findOneBy(['code' => InventoryReason::CODE_RETURN]);
 
                 // Release all reserved/picked units
                 $this->inventoryManager->releaseAllUnitsForOrder($so);
@@ -445,7 +445,7 @@ final readonly class SalesOrderService
 
             if ($newStatus === SalesOrder::STATUS_RETURNED) {
                 $returnReason = $this->em->getRepository(InventoryReason::class)
-                    ->findOneBy(['code' => 'RETURN']);
+                    ->findOneBy(['code' => InventoryReason::CODE_RETURN]);
 
                 $units = $this->em->getRepository(PacaUnit::class)->findBy([
                     'salesOrder' => $so,
