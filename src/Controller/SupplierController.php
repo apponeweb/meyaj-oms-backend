@@ -7,6 +7,8 @@ namespace App\Controller;
 use App\DTO\Request\CreateSupplierRequest;
 use App\DTO\Request\UpdateSupplierRequest;
 use App\Pagination\PaginationRequest;
+use App\Entity\User;
+use App\Service\SupplierExcelService;
 use App\Service\SupplierService;
 use Nelmio\ApiDocBundle\Attribute\Model;
 use OpenApi\Attributes as OA;
@@ -22,7 +24,10 @@ use Symfony\Component\Routing\Attribute\Route;
 #[OA\Tag(name: 'Proveedor - Proveedores')]
 final class SupplierController extends AbstractController
 {
-    public function __construct(private readonly SupplierService $service) {}
+    public function __construct(
+        private readonly SupplierService $service,
+        private readonly SupplierExcelService $excelService,
+    ) {}
 
     #[Route('', methods: ['GET'])]
     #[OA\Get(summary: 'Listar proveedores')]
@@ -70,5 +75,55 @@ final class SupplierController extends AbstractController
     {
         $data = json_decode($request->getContent(), true) ?? [];
         return $this->json($this->service->assignTags($id, $data['tagIds'] ?? []));
+    }
+
+    // ── Excel Export ─────────────────────────────────────────────────
+
+    #[Route('/export', methods: ['GET'])]
+    #[OA\Get(summary: 'Exportar proveedores a Excel')]
+    public function export(): Response
+    {
+        return $this->excelService->export();
+    }
+
+    // ── Excel Import ─────────────────────────────────────────────────
+
+    #[Route('/import/upload', methods: ['POST'])]
+    #[OA\Post(summary: 'Subir archivo Excel para importación')]
+    public function importUpload(Request $request): JsonResponse
+    {
+        $file = $request->files->get('file');
+        if (!$file) return $this->json(['error' => 'No se proporcionó archivo'], Response::HTTP_BAD_REQUEST);
+
+        /** @var User $user */
+        $user = $this->getUser();
+        $log = $this->excelService->uploadImportFile($file, $file->getClientOriginalName(), $user);
+
+        return $this->json([
+            'importId' => $log->getId(),
+            'totalRows' => $log->getTotalRows(),
+            'filename' => $log->getOriginalFilename(),
+        ], Response::HTTP_CREATED);
+    }
+
+    #[Route('/import/{id}/process', methods: ['POST'], requirements: ['id' => '\d+'])]
+    #[OA\Post(summary: 'Procesar importación de proveedores')]
+    public function importProcess(int $id): JsonResponse
+    {
+        return $this->json($this->excelService->processImport($id));
+    }
+
+    #[Route('/import/{id}/status', methods: ['GET'], requirements: ['id' => '\d+'])]
+    #[OA\Get(summary: 'Consultar estado de importación')]
+    public function importStatus(int $id): JsonResponse
+    {
+        return $this->json($this->excelService->getImportStatus($id));
+    }
+
+    #[Route('/import/history', methods: ['GET'])]
+    #[OA\Get(summary: 'Obtener historial de importaciones')]
+    public function importHistory(): JsonResponse
+    {
+        return $this->json($this->excelService->getHistory());
     }
 }

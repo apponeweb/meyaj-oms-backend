@@ -18,7 +18,7 @@ class SupplierRepository extends ServiceEntityRepository
     {
         $qb = $this->createQueryBuilder('s');
         if ($search !== null && $search !== '') {
-            $qb->andWhere('s.name LIKE :search OR s.contactName LIKE :search OR s.email LIKE :search')
+            $qb->andWhere('s.name LIKE :search OR s.address LIKE :search OR s.taxId LIKE :search')
                 ->setParameter('search', '%' . $search . '%');
         }
         return $qb;

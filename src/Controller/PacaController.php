@@ -141,9 +141,16 @@ final class PacaController extends AbstractController
 
     #[Route('/import/{id}/process', methods: ['POST'], requirements: ['id' => '\d+'])]
     #[OA\Post(summary: 'Ejecutar procesamiento de importación')]
-    public function importProcess(int $id): JsonResponse
+    public function importProcess(int $id, Request $request): JsonResponse
     {
-        $result = $this->excelService->processImport($id);
+        $payload = json_decode($request->getContent(), true, 512, \JSON_THROW_ON_ERROR);
+        $warehouseId = (int) ($payload['warehouseId'] ?? 0);
+
+        if ($warehouseId <= 0) {
+            return $this->json(['error' => ['message' => 'warehouseId es requerido para crear las unidades de inventario']], Response::HTTP_BAD_REQUEST);
+        }
+
+        $result = $this->excelService->processImport($id, $warehouseId);
         return $this->json($result);
     }
 

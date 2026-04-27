@@ -8,6 +8,7 @@ use App\DTO\Request\CreateCustomerRequest;
 use App\DTO\Request\UpdateCustomerRequest;
 use App\Pagination\PaginationRequest;
 use App\Service\CustomerService;
+use App\Service\CustomerExcelService;
 use Nelmio\ApiDocBundle\Attribute\Model;
 use OpenApi\Attributes as OA;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
@@ -24,6 +25,7 @@ final class CustomerController extends AbstractController
 {
     public function __construct(
         private readonly CustomerService $customerService,
+        private readonly CustomerExcelService $excelService,
     ) {
     }
 
@@ -99,5 +101,38 @@ final class CustomerController extends AbstractController
     {
         $this->customerService->delete($id);
         return $this->json(null, Response::HTTP_NO_CONTENT);
+    }
+
+    #[Route('/export', methods: ['GET'])]
+    public function export(): Response
+    {
+        return $this->excelService->export();
+    }
+
+    #[Route('/import/upload', methods: ['POST'])]
+    public function uploadImport(Request $request): JsonResponse
+    {
+        $file = $request->files->get('file');
+        if (!$file) return $this->json(['error' => 'No file uploaded'], 400);
+        $log = $this->excelService->uploadImportFile($file, $file->getClientOriginalName(), $this->getUser());
+        return $this->json(['importId' => $log->getId()]);
+    }
+
+    #[Route('/import/{id}/process', methods: ['POST'])]
+    public function processImport(int $id): JsonResponse
+    {
+        return $this->json($this->excelService->processImport($id));
+    }
+
+    #[Route('/import/{id}/status', methods: ['GET'])]
+    public function importStatus(int $id): JsonResponse
+    {
+        return $this->json($this->excelService->getImportStatus($id));
+    }
+
+    #[Route('/import/history', methods: ['GET'])]
+    public function importHistory(): JsonResponse
+    {
+        return $this->json($this->excelService->getHistory());
     }
 }

@@ -39,10 +39,24 @@ class SeedModulesCommand extends Command
     ];
 
     private const FUNCTIONS = [
-        // Catálogos
+        // Catálogos - Gestión
         ['module' => 'catalogos', 'code' => 'companies', 'name' => 'Empresas', 'order' => 1],
         ['module' => 'catalogos', 'code' => 'branches', 'name' => 'Sucursales', 'order' => 2],
         ['module' => 'catalogos', 'code' => 'departments', 'name' => 'Departamentos', 'order' => 3],
+        // Catálogos - Proveedor
+        ['module' => 'catalogos', 'code' => 'brands', 'name' => 'Marcas', 'order' => 4],
+        // Catálogos - Almacenes
+        ['module' => 'catalogos', 'code' => 'warehouse_types', 'name' => 'Tipos de Bodega', 'order' => 5],
+        // Catálogos - Inventario
+        ['module' => 'catalogos', 'code' => 'inventory_reasons', 'name' => 'Motivos de Movimiento', 'order' => 6],
+        // Catálogos - Productos
+        ['module' => 'catalogos', 'code' => 'labels', 'name' => 'Etiquetas', 'order' => 7],
+        ['module' => 'catalogos', 'code' => 'qualities', 'name' => 'Calidades', 'order' => 8],
+        ['module' => 'catalogos', 'code' => 'seasons', 'name' => 'Temporadas', 'order' => 9],
+        ['module' => 'catalogos', 'code' => 'genders', 'name' => 'Género', 'order' => 10],
+        ['module' => 'catalogos', 'code' => 'garment_types', 'name' => 'Tipos de prenda', 'order' => 11],
+        ['module' => 'catalogos', 'code' => 'fabric_types', 'name' => 'Tipos de tela', 'order' => 12],
+        ['module' => 'catalogos', 'code' => 'size_profiles', 'name' => 'Perfiles de talla', 'order' => 13],
         // Seguridad - Control de acceso
         ['module' => 'seguridad', 'code' => 'roles', 'name' => 'Roles', 'order' => 1],
         ['module' => 'seguridad', 'code' => 'permissions', 'name' => 'Permisos', 'order' => 2],
@@ -52,19 +66,10 @@ class SeedModulesCommand extends Command
         ['module' => 'seguridad', 'code' => 'modules_mgmt', 'name' => 'Módulos', 'order' => 5],
         ['module' => 'seguridad', 'code' => 'functions_mgmt', 'name' => 'Funcionalidades', 'order' => 6],
         ['module' => 'seguridad', 'code' => 'actions_mgmt', 'name' => 'Acciones', 'order' => 7],
-        // Proveedores
+        // Proveedor
         ['module' => 'proveedor', 'code' => 'suppliers', 'name' => 'Proveedores', 'order' => 1],
-        ['module' => 'proveedor', 'code' => 'brands', 'name' => 'Marcas', 'order' => 2],
-        // Productos - Inventario
+        // Productos
         ['module' => 'productos', 'code' => 'pacas', 'name' => 'Pacas', 'order' => 1],
-        // Productos - Catálogos
-        ['module' => 'productos', 'code' => 'labels', 'name' => 'Etiquetas', 'order' => 2],
-        ['module' => 'productos', 'code' => 'qualities', 'name' => 'Calidades', 'order' => 3],
-        ['module' => 'productos', 'code' => 'seasons', 'name' => 'Temporadas', 'order' => 4],
-        ['module' => 'productos', 'code' => 'genders', 'name' => 'Género', 'order' => 5],
-        ['module' => 'productos', 'code' => 'garment_types', 'name' => 'Tipos de prenda', 'order' => 6],
-        ['module' => 'productos', 'code' => 'fabric_types', 'name' => 'Tipos de tela', 'order' => 7],
-        ['module' => 'productos', 'code' => 'size_profiles', 'name' => 'Perfiles de talla', 'order' => 8],
         // Ventas
         ['module' => 'ventas', 'code' => 'pos', 'name' => 'Punto de venta', 'order' => 1],
         ['module' => 'ventas', 'code' => 'sales', 'name' => 'Historial de ventas', 'order' => 2],
@@ -72,13 +77,11 @@ class SeedModulesCommand extends Command
         // Almacenes
         ['module' => 'almacenes', 'code' => 'warehouses', 'name' => 'Bodegas', 'order' => 1],
         ['module' => 'almacenes', 'code' => 'warehouse_bins', 'name' => 'Ubicaciones', 'order' => 2],
-        ['module' => 'almacenes', 'code' => 'warehouse_types', 'name' => 'Tipos de Bodega', 'order' => 3],
         // Inventario
         ['module' => 'inventario', 'code' => 'kardex', 'name' => 'Kardex', 'order' => 1],
         ['module' => 'inventario', 'code' => 'inventory_counts', 'name' => 'Conteos Físicos', 'order' => 2],
         ['module' => 'inventario', 'code' => 'inventory_dashboard', 'name' => 'Dashboard Almacén', 'order' => 3],
-        ['module' => 'inventario', 'code' => 'inventory_reasons', 'name' => 'Motivos de Movimiento', 'order' => 4],
-        ['module' => 'inventario', 'code' => 'inventory_reservations', 'name' => 'Reservas de Inventario', 'order' => 5],
+        ['module' => 'inventario', 'code' => 'inventory_reservations', 'name' => 'Reservas de Inventario', 'order' => 4],
         // Compras
         ['module' => 'compras', 'code' => 'purchase_orders', 'name' => 'Órdenes de Compra', 'order' => 1],
         // Pedidos
@@ -181,8 +184,10 @@ class SeedModulesCommand extends Command
         foreach (self::FUNCTIONS as $data) {
             $existing = $fnRepo->findOneBy(['code' => $data['code']]);
             if ($existing) {
+                $existing->setAppModule($modules[$data['module']]);
+                $existing->setDisplayOrder($data['order']);
                 $functions[$data['code']] = $existing;
-                $io->note("Function '{$data['code']}' already exists, skipping.");
+                $io->note("Updated function '{$data['code']}' → module '{$data['module']}'.");
                 continue;
             }
 

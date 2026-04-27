@@ -34,3 +34,17 @@ services:
     App\Service\PacaExcelService:
         arguments:
             $importDir: '%kernel.project_dir%/var/imports'
+
+    App\Service\UserExcelService:
+        arguments:
+            $importDir: '%kernel.project_dir%/var/imports'
+
+    App\Service\SupplierExcelService:
+        arguments:
+            $brandRepository: '@App\Repository\BrandRepository'
+            $tagRepository: '@App\Repository\LabelCatalogRepository'
+            $importDir: '%kernel.project_dir%/var/imports'
+
+    App\Service\CustomerExcelService:
+        arguments:
+            $importDir: '%kernel.project_dir%/var/imports'

@@ -14,6 +14,7 @@ final readonly class InventoryReasonResponse
     public string $direction;
     public bool $requiresReference;
     public bool $isActive;
+    public bool $isSystem;
     public string $createdAt;
     public string $updatedAt;
 
@@ -25,6 +26,7 @@ final readonly class InventoryReasonResponse
         $this->direction = $reason->getDirection();
         $this->requiresReference = $reason->isRequiresReference();
         $this->isActive = $reason->isActive();
+        $this->isSystem = in_array($reason->getCode(), InventoryReason::SYSTEM_CODES, true);
         $this->createdAt = $reason->getCreatedAt()->format(\DateTimeInterface::ATOM);
         $this->updatedAt = $reason->getUpdatedAt()->format(\DateTimeInterface::ATOM);
     }

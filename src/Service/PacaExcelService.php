@@ -6,9 +6,12 @@ namespace App\Service;
 
 use App\Entity\Paca;
 use App\Entity\PacaImportLog;
+use App\Entity\PacaUnit;
 use App\Entity\User;
+use App\Entity\Warehouse;
 use App\Repository\PacaImportLogRepository;
 use App\Repository\PacaRepository;
+use App\Repository\WarehouseRepository;
 use Doctrine\ORM\EntityManagerInterface;
 use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
 use PhpOffice\PhpSpreadsheet\IOFactory;
@@ -33,6 +36,7 @@ final readonly class PacaExcelService
         private EntityManagerInterface $em,
         private PacaRepository $pacaRepository,
         private PacaImportLogRepository $importLogRepository,
+        private WarehouseRepository $warehouseRepository,
         private string $importDir,
     ) {}
 
@@ -127,7 +131,7 @@ final readonly class PacaExcelService
 
     // ── Import — Phase 2: process (synchronous, saves progress per row) ──
 
-    public function processImport(int $importId): array
+    public function processImport(int $importId, int $warehouseId): array
     {
         $log = $this->importLogRepository->find($importId);
         if ($log === null) {
@@ -135,6 +139,11 @@ final readonly class PacaExcelService
         }
         if ($log->getStatus() !== PacaImportLog::STATUS_PENDING) {
             throw new BadRequestHttpException('Esta importación ya fue procesada.');
+        }
+
+        $warehouse = $this->warehouseRepository->find($warehouseId);
+        if ($warehouse === null) {
+            throw new BadRequestHttpException('La bodega especificada no existe.');
         }
 
         $filePath = $this->importDir . '/' . $log->getFilename();
@@ -175,13 +184,11 @@ final readonly class PacaExcelService
             $updated = 0;
             $errors = [];
             $processed = 0;
-            $total = \count($rows);
 
             foreach ($rows as $rowNum => $row) {
                 $code = trim((string) ($row[$colMap['código'] ?? $colMap['codigo'] ?? ''] ?? ''));
                 if ($code === '') {
                     $processed++;
-                    // Update progress in DB every row
                     $log->setProcessedRows($processed);
                     $this->em->flush();
                     continue;
@@ -198,7 +205,6 @@ final readonly class PacaExcelService
                     continue;
                 }
 
-                // Validate unique name within file
                 $nameLower = mb_strtolower($name);
                 if (isset($namesInFile[$nameLower]) && $namesInFile[$nameLower] !== $code) {
                     $errors[] = "Fila {$rowNum}: El nombre '{$name}' está duplicado en el archivo (ya en código '{$namesInFile[$nameLower]}').";
@@ -210,7 +216,6 @@ final readonly class PacaExcelService
                     continue;
                 }
 
-                // Validate unique name against DB
                 if (isset($existingNames[$nameLower]) && $existingNames[$nameLower] !== $code) {
                     $errors[] = "Fila {$rowNum}: El nombre '{$name}' ya existe en la BD (código '{$existingNames[$nameLower]}').";
                     $processed++;
@@ -225,26 +230,27 @@ final readonly class PacaExcelService
 
                 try {
                     $existingPaca = $this->pacaRepository->findOneBy(['code' => $code]);
+                    $isNew = $existingPaca === null;
                     $paca = $existingPaca ?? new Paca();
 
                     $paca->setCode($code);
                     $paca->setName($name);
                     $this->applyCellValues($paca, $row, $colMap, $catalogMap);
 
-                    if ($existingPaca === null) {
+                    if ($isNew) {
                         $this->em->persist($paca);
                         $created++;
                         $existingNames[$nameLower] = $code;
                     } else {
                         $updated++;
                     }
+
+                    $this->syncUnitsForImport($paca, $warehouse, $isNew);
                 } catch (\Throwable $e) {
                     $errors[] = "Fila {$rowNum} (código '{$code}'): " . $e->getMessage();
                 }
 
                 $processed++;
-
-                // Update progress in DB every row
                 $log->setProcessedRows($processed);
                 $log->setCreatedCount($created);
                 $log->setUpdatedCount($updated);
@@ -270,6 +276,46 @@ final readonly class PacaExcelService
         }
 
         return $this->formatLogResponse($log);
+    }
+
+    private function syncUnitsForImport(Paca $paca, Warehouse $warehouse, bool $isNew): void
+    {
+        $stock = $paca->getCachedStock();
+        if ($stock <= 0) {
+            return;
+        }
+
+        if ($isNew) {
+            // New paca: serial offset starts at 0 (no existing units)
+            $this->createUnitsForImport($paca, $warehouse, $stock, 0);
+            return;
+        }
+
+        // Existing paca: count all units (for serial continuity) and available units (to compute delta)
+        $totalUnits = (int) $this->em->createQuery(
+            'SELECT COUNT(u.id) FROM App\Entity\PacaUnit u WHERE u.paca = :paca'
+        )->setParameter('paca', $paca)->getSingleScalarResult();
+
+        $availableUnits = (int) $this->em->createQuery(
+            "SELECT COUNT(u.id) FROM App\Entity\PacaUnit u WHERE u.paca = :paca AND u.status = 'AVAILABLE'"
+        )->setParameter('paca', $paca)->getSingleScalarResult();
+
+        $delta = $stock - $availableUnits;
+        if ($delta > 0) {
+            $this->createUnitsForImport($paca, $warehouse, $delta, $totalUnits);
+        }
+    }
+
+    private function createUnitsForImport(Paca $paca, Warehouse $warehouse, int $quantity, int $serialOffset): void
+    {
+        for ($i = 0; $i < $quantity; $i++) {
+            $unit = new PacaUnit();
+            $unit->setPaca($paca);
+            $unit->setWarehouse($warehouse);
+            $unit->setSerial(sprintf('%s-%04d', $paca->getCode(), $serialOffset + $i + 1));
+            $unit->setStatus(PacaUnit::STATUS_AVAILABLE);
+            $this->em->persist($unit);
+        }
     }
 
     // ── Get import status (for polling) ──────────────────────────────

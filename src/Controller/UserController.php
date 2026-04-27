@@ -7,12 +7,16 @@ namespace App\Controller;
 use App\DTO\Request\CreateUserRequest;
 use App\DTO\Request\UpdateUserRequest;
 use App\Pagination\PaginationRequest;
+use App\Entity\User;
+use App\Service\UserExcelService;
 use App\Service\UserService;
 use Nelmio\ApiDocBundle\Attribute\Model;
 use OpenApi\Attributes as OA;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
+use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 use Symfony\Component\HttpKernel\Attribute\MapQueryString;
 use Symfony\Component\HttpKernel\Attribute\MapRequestPayload;
 use Symfony\Component\Routing\Attribute\Route;
@@ -23,6 +27,7 @@ final class UserController extends AbstractController
 {
     public function __construct(
         private readonly UserService $userService,
+        private readonly UserExcelService $excelService,
     ) {
     }
 
@@ -100,5 +105,73 @@ final class UserController extends AbstractController
         $this->userService->delete($id);
 
         return $this->json(null, Response::HTTP_NO_CONTENT);
+    }
+
+    // ── Excel Export ─────────────────────────────────────────────────
+
+    #[Route('/export', methods: ['GET'])]
+    #[OA\Get(summary: 'Exportar usuarios a Excel')]
+    public function export(): StreamedResponse
+    {
+        return $this->excelService->export();
+    }
+
+    // ── Excel Import — Phase 1: upload file ──────────────────────────
+
+    #[Route('/import/upload', methods: ['POST'])]
+    #[OA\Post(summary: 'Subir archivo Excel para importación')]
+    public function importUpload(Request $request): JsonResponse
+    {
+        $file = $request->files->get('file');
+        if (!$file) {
+            return $this->json(['error' => 'No se proporcionó archivo'], Response::HTTP_BAD_REQUEST);
+        }
+
+        $allowed = [
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'application/vnd.ms-excel',
+        ];
+        if (!\in_array($file->getMimeType(), $allowed, true)) {
+            return $this->json(['error' => 'El archivo debe ser un Excel (.xlsx)'], Response::HTTP_BAD_REQUEST);
+        }
+
+        /** @var User $user */
+        $user = $this->getUser();
+
+        $log = $this->excelService->uploadImportFile($file, $file->getClientOriginalName(), $user);
+
+        return $this->json([
+            'importId' => $log->getId(),
+            'totalRows' => $log->getTotalRows(),
+            'filename' => $log->getOriginalFilename(),
+        ], Response::HTTP_CREATED);
+    }
+
+    // ── Excel Import — Phase 2: process ──────────────────────────────
+
+    #[Route('/import/{id}/process', methods: ['POST'], requirements: ['id' => '\d+'])]
+    #[OA\Post(summary: 'Ejecutar procesamiento de importación')]
+    public function importProcess(int $id): JsonResponse
+    {
+        $result = $this->excelService->processImport($id);
+        return $this->json($result);
+    }
+
+    // ── Import status (for polling) ──────────────────────────────────
+
+    #[Route('/import/{id}/status', methods: ['GET'], requirements: ['id' => '\d+'])]
+    #[OA\Get(summary: 'Consultar estado de una importación')]
+    public function importStatus(int $id): JsonResponse
+    {
+        return $this->json($this->excelService->getImportStatus($id));
+    }
+
+    // ── Import History ───────────────────────────────────────────────
+
+    #[Route('/import/history', methods: ['GET'])]
+    #[OA\Get(summary: 'Historial de importaciones')]
+    public function importHistory(): JsonResponse
+    {
+        return $this->json($this->excelService->getHistory());
     }
 }
