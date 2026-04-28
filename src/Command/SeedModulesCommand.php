@@ -36,6 +36,7 @@ class SeedModulesCommand extends Command
         ['code' => 'compras', 'name' => 'Compras', 'icon' => 'ShoppingBag', 'order' => 8],
         ['code' => 'pedidos', 'name' => 'Pedidos', 'icon' => 'FileText', 'order' => 9],
         ['code' => 'reportes', 'name' => 'Reportes', 'icon' => 'BarChart3', 'order' => 10],
+        ['code' => 'clientes', 'name' => 'Clientes', 'icon' => 'UserCog', 'order' => 11],
     ];
 
     private const FUNCTIONS = [
@@ -73,7 +74,8 @@ class SeedModulesCommand extends Command
         // Ventas
         ['module' => 'ventas', 'code' => 'pos', 'name' => 'Punto de venta', 'order' => 1],
         ['module' => 'ventas', 'code' => 'sales', 'name' => 'Historial de ventas', 'order' => 2],
-        ['module' => 'ventas', 'code' => 'customers', 'name' => 'Clientes', 'order' => 3],
+        // Clientes
+        ['module' => 'clientes', 'code' => 'customers', 'name' => 'Clientes', 'order' => 1],
         // Almacenes
         ['module' => 'almacenes', 'code' => 'warehouses', 'name' => 'Bodegas', 'order' => 1],
         ['module' => 'almacenes', 'code' => 'warehouse_bins', 'name' => 'Ubicaciones', 'order' => 2],
@@ -277,8 +279,8 @@ class SeedModulesCommand extends Command
         $this->em->flush();
         $io->info('Created role: Vendedor');
 
-        // Module access: ventas and reportes
-        foreach (['ventas', 'reportes'] as $code) {
+        // Module access: ventas, reportes, and clientes
+        foreach (['ventas', 'reportes', 'clientes'] as $code) {
             $module = $modules[$code];
 
             $rmp = new RoleModulePermission();
