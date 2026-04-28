@@ -59,6 +59,9 @@ class PacaUnit
     #[ORM\JoinColumn(nullable: true, onDelete: 'SET NULL')]
     private ?PurchaseOrder $purchaseOrder = null;
 
+    #[ORM\Column(nullable: true)]
+    private ?\DateTimeImmutable $labeledAt = null;
+
     #[ORM\Column]
     private \DateTimeImmutable $createdAt;
 
@@ -100,6 +103,10 @@ class PacaUnit
     public function getCreatedAt(): \DateTimeImmutable { return $this->createdAt; }
     public function getUpdatedAt(): \DateTimeImmutable { return $this->updatedAt; }
     #[ORM\PreUpdate] public function setUpdatedAtValue(): void { $this->updatedAt = new \DateTimeImmutable(); }
+
+    public function getLabeledAt(): ?\DateTimeImmutable { return $this->labeledAt; }
+    public function markAsLabeled(): static { $this->labeledAt = new \DateTimeImmutable(); return $this; }
+    public function isLabeled(): bool { return $this->labeledAt !== null; }
 
     public function isAvailable(): bool { return $this->status === self::STATUS_AVAILABLE; }
     public function isReserved(): bool { return $this->status === self::STATUS_RESERVED; }

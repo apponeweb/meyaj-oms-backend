@@ -32,22 +32,40 @@ final class PacaUnitController extends AbstractController
     {
         $p ??= new PaginationRequest();
 
-        $pacaId = $httpRequest->query->getInt('pacaId') ?: null;
-        $warehouseId = $httpRequest->query->getInt('warehouseId') ?: null;
-        $warehouseBinId = $httpRequest->query->getInt('warehouseBinId') ?: null;
-        $status = $httpRequest->query->get('status') ?: null;
-        $salesOrderId = $httpRequest->query->getInt('salesOrderId') ?: null;
+        $pacaId          = $httpRequest->query->getInt('pacaId') ?: null;
+        $warehouseId     = $httpRequest->query->getInt('warehouseId') ?: null;
+        $warehouseBinId  = $httpRequest->query->getInt('warehouseBinId') ?: null;
+        $status          = $httpRequest->query->get('status') ?: null;
+        $salesOrderId    = $httpRequest->query->getInt('salesOrderId') ?: null;
         $purchaseOrderId = $httpRequest->query->getInt('purchaseOrderId') ?: null;
+        $labeledRaw      = $httpRequest->query->get('labeled');
+        $labeled         = $labeledRaw !== null
+            ? filter_var($labeledRaw, \FILTER_VALIDATE_BOOLEAN, \FILTER_NULL_ON_FAILURE)
+            : null;
 
         return $this->json($this->pacaUnitService->list(
-            $p,
-            $pacaId,
-            $warehouseId,
-            $warehouseBinId,
-            $status,
-            $salesOrderId,
-            $purchaseOrderId,
+            $p, $pacaId, $warehouseId, $warehouseBinId,
+            $status, $salesOrderId, $purchaseOrderId, $labeled,
         ));
+    }
+
+    #[Route('/mark-labeled', methods: ['POST'])]
+    #[OA\Post(summary: 'Marcar unidades como etiquetadas (lote)')]
+    public function markLabeled(Request $request): JsonResponse
+    {
+        $data = json_decode($request->getContent(), true, 512, \JSON_THROW_ON_ERROR);
+        $ids  = $data['ids'] ?? [];
+
+        if (!is_array($ids) || empty($ids)) {
+            return $this->json(['error' => 'Se requiere array de IDs en "ids".'], Response::HTTP_BAD_REQUEST);
+        }
+
+        $count = $this->pacaUnitService->markLabeled(array_map('intval', $ids));
+
+        return $this->json([
+            'updated' => $count,
+            'message' => \sprintf('%d unidad(es) marcada(s) como etiquetada(s).', $count),
+        ]);
     }
 
     #[Route('/{id}', methods: ['GET'], requirements: ['id' => '\d+'])]

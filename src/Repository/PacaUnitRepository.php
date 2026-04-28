@@ -27,6 +27,7 @@ class PacaUnitRepository extends ServiceEntityRepository
         ?string $status = null,
         ?int $salesOrderId = null,
         ?int $purchaseOrderId = null,
+        ?bool $labeled = null,
     ): QueryBuilder {
         $qb = $this->createQueryBuilder('pu')
             ->leftJoin('pu.paca', 'p')->addSelect('p')
@@ -55,9 +56,36 @@ class PacaUnitRepository extends ServiceEntityRepository
         if ($purchaseOrderId !== null) {
             $qb->andWhere('pu.purchaseOrder = :purchaseOrderId')->setParameter('purchaseOrderId', $purchaseOrderId);
         }
+        if ($labeled === true) {
+            $qb->andWhere('pu.labeledAt IS NOT NULL');
+        } elseif ($labeled === false) {
+            $qb->andWhere('pu.labeledAt IS NULL');
+        }
 
         return $qb;
     }
+
+    /**
+     * Mark multiple units as labeled (bulk).
+     * @param int[] $ids
+     */
+    public function markLabeledBulk(array $ids): int
+    {
+        if (empty($ids)) {
+            return 0;
+        }
+
+        return (int) $this->createQueryBuilder('pu')
+            ->update()
+            ->set('pu.labeledAt', ':now')
+            ->set('pu.updatedAt', ':now')
+            ->where('pu.id IN (:ids)')
+            ->setParameter('now', new \DateTimeImmutable())
+            ->setParameter('ids', $ids)
+            ->getQuery()
+            ->execute();
+    }
+
 
     public function countAvailableByPaca(int $pacaId): int
     {

@@ -33,6 +33,7 @@ final readonly class PacaUnitService
         ?string $status = null,
         ?int $salesOrderId = null,
         ?int $purchaseOrderId = null,
+        ?bool $labeled = null,
     ): PaginatedResponse {
         $qb = $this->pacaUnitRepo->createPaginatedQueryBuilder(
             $pagination->search,
@@ -42,6 +43,7 @@ final readonly class PacaUnitService
             $status,
             $salesOrderId,
             $purchaseOrderId,
+            $labeled,
         );
         $result = $this->paginator->paginate($qb, $pagination);
 
@@ -123,5 +125,18 @@ final readonly class PacaUnitService
             ->getSingleScalarResult();
 
         return \sprintf('%s-%04d', $paca->getCode(), $count + 1);
+    }
+
+    /**
+     * Mark units as labeled in bulk.
+     * @param int[] $ids
+     * @return int number of rows updated
+     */
+    public function markLabeled(array $ids): int
+    {
+        if (empty($ids)) {
+            throw new BadRequestHttpException('Debe proporcionar al menos un ID.');
+        }
+        return $this->pacaUnitRepo->markLabeledBulk($ids);
     }
 }

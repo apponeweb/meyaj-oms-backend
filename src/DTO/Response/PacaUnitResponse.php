@@ -16,6 +16,7 @@ final readonly class PacaUnitResponse
     public string $status;
     public ?int $salesOrderId;
     public ?int $salesOrderItemId;
+    public ?string $labeledAt;
     public string $createdAt;
     public string $updatedAt;
 
@@ -39,6 +40,7 @@ final readonly class PacaUnitResponse
         $this->status = $u->getStatus();
         $this->salesOrderId = $u->getSalesOrder()?->getId();
         $this->salesOrderItemId = $u->getSalesOrderItem()?->getId();
+        $this->labeledAt = $u->getLabeledAt()?->format(\DateTimeInterface::ATOM);
         $this->createdAt = $u->getCreatedAt()->format(\DateTimeInterface::ATOM);
         $this->updatedAt = $u->getUpdatedAt()->format(\DateTimeInterface::ATOM);
     }
