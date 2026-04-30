@@ -131,7 +131,7 @@ final readonly class PacaExcelService
 
     // ── Import — Phase 2: process (synchronous, saves progress per row) ──
 
-    public function processImport(int $importId, int $warehouseId): array
+    public function processImport(int $importId, int $warehouseId, bool $replaceUnits = false): array
     {
         $log = $this->importLogRepository->find($importId);
         if ($log === null) {
@@ -245,7 +245,7 @@ final readonly class PacaExcelService
                         $updated++;
                     }
 
-                    $this->syncUnitsForImport($paca, $warehouse, $isNew);
+                    $this->syncUnitsForImport($paca, $warehouse, $isNew, $replaceUnits);
                 } catch (\Throwable $e) {
                     $errors[] = "Fila {$rowNum} (código '{$code}'): " . $e->getMessage();
                 }
@@ -278,20 +278,35 @@ final readonly class PacaExcelService
         return $this->formatLogResponse($log);
     }
 
-    private function syncUnitsForImport(Paca $paca, Warehouse $warehouse, bool $isNew): void
+    private function syncUnitsForImport(Paca $paca, Warehouse $warehouse, bool $isNew, bool $replaceUnits = false): void
     {
         $stock = $paca->getCachedStock();
-        if ($stock <= 0) {
-            return;
-        }
 
         if ($isNew) {
-            // New paca: serial offset starts at 0 (no existing units)
+            if ($stock <= 0) {
+                return;
+            }
             $this->createUnitsForImport($paca, $warehouse, $stock, 0);
             return;
         }
 
-        // Existing paca: count all units (for serial continuity) and available units (to compute delta)
+        if ($replaceUnits) {
+            // Delete all AVAILABLE units and recreate from serial 1
+            $this->em->createQuery(
+                "DELETE FROM App\Entity\PacaUnit u WHERE u.paca = :paca AND u.status = 'AVAILABLE'"
+            )->setParameter('paca', $paca)->execute();
+
+            if ($stock > 0) {
+                $this->createUnitsForImport($paca, $warehouse, $stock, 0);
+            }
+            return;
+        }
+
+        // Continue mode: add units to reach desired stock, continuing from highest serial
+        if ($stock <= 0) {
+            return;
+        }
+
         $totalUnits = (int) $this->em->createQuery(
             'SELECT COUNT(u.id) FROM App\Entity\PacaUnit u WHERE u.paca = :paca'
         )->setParameter('paca', $paca)->getSingleScalarResult();

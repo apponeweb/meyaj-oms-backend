@@ -145,12 +145,13 @@ final class PacaController extends AbstractController
     {
         $payload = json_decode($request->getContent(), true, 512, \JSON_THROW_ON_ERROR);
         $warehouseId = (int) ($payload['warehouseId'] ?? 0);
+        $replaceUnits = (bool) ($payload['replaceUnits'] ?? false);
 
         if ($warehouseId <= 0) {
             return $this->json(['error' => ['message' => 'warehouseId es requerido para crear las unidades de inventario']], Response::HTTP_BAD_REQUEST);
         }
 
-        $result = $this->excelService->processImport($id, $warehouseId);
+        $result = $this->excelService->processImport($id, $warehouseId, $replaceUnits);
         return $this->json($result);
     }
 

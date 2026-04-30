@@ -11,6 +11,7 @@ use App\DTO\Response\InventoryCountResponse;
 use App\Entity\Company;
 use App\Entity\InventoryCount;
 use App\Entity\InventoryCountDetail;
+use App\Entity\InventoryMovement;
 use App\Entity\InventoryReason;
 use App\Entity\Paca;
 use App\Entity\PacaUnit;
@@ -275,6 +276,28 @@ final readonly class InventoryCountService
                         forceAdjustment: true,
                     );
                 }
+            } else {
+                // diff = 0: record a verification entry in the kardex without altering stock
+                $paca = $detail->getPaca();
+                $warehouse = $count->getWarehouse();
+                $verifyReason = $adjustmentIn ?? $this->em->getRepository(InventoryReason::class)->findOneBy([]);
+                if ($verifyReason !== null) {
+                    $mov = new InventoryMovement();
+                    $mov->setCompany($warehouse->getCompany());
+                    $mov->setPaca($paca);
+                    $mov->setWarehouse($warehouse);
+                    $mov->setWarehouseBin(null);
+                    $mov->setReason($verifyReason);
+                    $mov->setUser($user);
+                    $mov->setMovementType('CNT');
+                    $mov->setReferenceType('INVENTORY_COUNT');
+                    $mov->setReferenceId($count->getId());
+                    $mov->setQtyIn($detail->getSystemQty());
+                    $mov->setQtyOut(0);
+                    $mov->setBalanceAfter($paca->getCachedStock());
+                    $mov->setNotes(sprintf('Constatación conteo físico %s', $count->getFolio()));
+                    $this->em->persist($mov);
+                }
             }
         }
 
@@ -421,6 +444,28 @@ final readonly class InventoryCountService
                         notes: sprintf('Corrección por reconteo %s (1er: %d, 2do: %d)', $count->getFolio(), $firstCounted, $recounted),
                         forceAdjustment: true,
                     );
+                }
+            } else {
+                // correction = 0 in recount: record verification entry
+                $paca = $detail->getPaca();
+                $warehouse = $count->getWarehouse();
+                $verifyReason = $adjustmentIn ?? $this->em->getRepository(InventoryReason::class)->findOneBy([]);
+                if ($verifyReason !== null) {
+                    $mov = new InventoryMovement();
+                    $mov->setCompany($warehouse->getCompany());
+                    $mov->setPaca($paca);
+                    $mov->setWarehouse($warehouse);
+                    $mov->setWarehouseBin(null);
+                    $mov->setReason($verifyReason);
+                    $mov->setUser($user);
+                    $mov->setMovementType('CNT');
+                    $mov->setReferenceType('INVENTORY_COUNT');
+                    $mov->setReferenceId($count->getId());
+                    $mov->setQtyIn($detail->getCountedQty() ?? $detail->getSystemQty());
+                    $mov->setQtyOut(0);
+                    $mov->setBalanceAfter($paca->getCachedStock());
+                    $mov->setNotes(sprintf('Constatación reconteo %s', $count->getFolio()));
+                    $this->em->persist($mov);
                 }
             }
         }

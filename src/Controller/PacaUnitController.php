@@ -33,6 +33,13 @@ final class PacaUnitController extends AbstractController
         $p ??= new PaginationRequest();
 
         $pacaId          = $httpRequest->query->getInt('pacaId') ?: null;
+        $pacaIdsRaw      = $httpRequest->query->all('pacaIds');
+        $pacaIds         = !empty($pacaIdsRaw)
+            ? array_values(array_filter(array_map('intval', $pacaIdsRaw), fn(int $v) => $v > 0))
+            : null;
+        if ($pacaIds !== null && empty($pacaIds)) {
+            $pacaIds = null;
+        }
         $warehouseId     = $httpRequest->query->getInt('warehouseId') ?: null;
         $warehouseBinId  = $httpRequest->query->getInt('warehouseBinId') ?: null;
         $status          = $httpRequest->query->get('status') ?: null;
@@ -45,7 +52,7 @@ final class PacaUnitController extends AbstractController
 
         return $this->json($this->pacaUnitService->list(
             $p, $pacaId, $warehouseId, $warehouseBinId,
-            $status, $salesOrderId, $purchaseOrderId, $labeled,
+            $status, $salesOrderId, $purchaseOrderId, $labeled, $pacaIds,
         ));
     }
 
@@ -65,6 +72,30 @@ final class PacaUnitController extends AbstractController
         return $this->json([
             'updated' => $count,
             'message' => \sprintf('%d unidad(es) marcada(s) como etiquetada(s).', $count),
+        ]);
+    }
+
+    #[Route('/reserve', methods: ['POST'])]
+    #[OA\Post(summary: 'Reservar unidades en lote (solo AVAILABLE)')]
+    public function reserve(Request $request): JsonResponse
+    {
+        $data = json_decode($request->getContent(), true, 512, \JSON_THROW_ON_ERROR);
+        $ids  = $data['ids'] ?? [];
+
+        if (!is_array($ids) || empty($ids)) {
+            return $this->json(['error' => 'Se requiere array de IDs en "ids".'], Response::HTTP_BAD_REQUEST);
+        }
+
+        $result = $this->pacaUnitService->reserveBulk(array_map('intval', $ids));
+
+        return $this->json([
+            'reserved' => $result['reserved'],
+            'skipped'  => $result['skipped'],
+            'message'  => \sprintf(
+                '%d unidad(es) reservada(s).%s',
+                $result['reserved'],
+                $result['skipped'] > 0 ? \sprintf(' %d omitida(s) por no estar disponibles.', $result['skipped']) : '',
+            ),
         ]);
     }
 

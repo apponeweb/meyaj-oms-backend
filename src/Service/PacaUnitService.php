@@ -25,6 +25,9 @@ final readonly class PacaUnitService
         private Paginator $paginator,
     ) {}
 
+    /**
+     * @param int[]|null $pacaIds
+     */
     public function list(
         PaginationRequest $pagination,
         ?int $pacaId = null,
@@ -34,6 +37,7 @@ final readonly class PacaUnitService
         ?int $salesOrderId = null,
         ?int $purchaseOrderId = null,
         ?bool $labeled = null,
+        ?array $pacaIds = null,
     ): PaginatedResponse {
         $qb = $this->pacaUnitRepo->createPaginatedQueryBuilder(
             $pagination->search,
@@ -44,6 +48,7 @@ final readonly class PacaUnitService
             $salesOrderId,
             $purchaseOrderId,
             $labeled,
+            $pacaIds,
         );
         $result = $this->paginator->paginate($qb, $pagination);
 
@@ -138,5 +143,32 @@ final readonly class PacaUnitService
             throw new BadRequestHttpException('Debe proporcionar al menos un ID.');
         }
         return $this->pacaUnitRepo->markLabeledBulk($ids);
+    }
+
+    /**
+     * Reserve units in bulk (only AVAILABLE units are affected).
+     * @param int[] $ids
+     * @return array{reserved: int, skipped: int}
+     */
+    public function reserveBulk(array $ids): array
+    {
+        if (empty($ids)) {
+            throw new BadRequestHttpException('Debe proporcionar al menos un ID.');
+        }
+
+        $updated = $this->em->createQuery(
+            "UPDATE App\Entity\PacaUnit u
+             SET u.status = :reserved
+             WHERE u.id IN (:ids) AND u.status = :available"
+        )
+            ->setParameter('reserved', PacaUnit::STATUS_RESERVED)
+            ->setParameter('available', PacaUnit::STATUS_AVAILABLE)
+            ->setParameter('ids', $ids)
+            ->execute();
+
+        return [
+            'reserved' => $updated,
+            'skipped'  => \count($ids) - $updated,
+        ];
     }
 }

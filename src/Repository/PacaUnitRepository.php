@@ -19,6 +19,9 @@ class PacaUnitRepository extends ServiceEntityRepository
         parent::__construct($registry, PacaUnit::class);
     }
 
+    /**
+     * @param int[]|null $pacaIds
+     */
     public function createPaginatedQueryBuilder(
         ?string $search = null,
         ?int $pacaId = null,
@@ -28,6 +31,7 @@ class PacaUnitRepository extends ServiceEntityRepository
         ?int $salesOrderId = null,
         ?int $purchaseOrderId = null,
         ?bool $labeled = null,
+        ?array $pacaIds = null,
     ): QueryBuilder {
         $qb = $this->createQueryBuilder('pu')
             ->leftJoin('pu.paca', 'p')->addSelect('p')
@@ -38,7 +42,9 @@ class PacaUnitRepository extends ServiceEntityRepository
             $qb->andWhere('pu.serial LIKE :search OR p.code LIKE :search OR p.name LIKE :search')
                 ->setParameter('search', '%' . $search . '%');
         }
-        if ($pacaId !== null) {
+        if ($pacaIds !== null && count($pacaIds) > 0) {
+            $qb->andWhere('p.id IN (:pacaIds)')->setParameter('pacaIds', $pacaIds);
+        } elseif ($pacaId !== null) {
             $qb->andWhere('p.id = :pacaId')->setParameter('pacaId', $pacaId);
         }
         if ($warehouseId !== null) {
