@@ -44,6 +44,137 @@ php bin/console app:seed-despacho
 symfony server:start
 ```
 
+## Configuración operativa local y servidor
+
+### Permisos de carpetas
+
+Para que Symfony pueda generar caché, proxies de Doctrine y archivos temporales de importación, el usuario del servidor web debe tener permisos de escritura sobre:
+
+```text
+var/
+var/cache/
+var/log/
+var/imports/
+var/cache/prod/doctrine/orm/Proxies/
+```
+
+En Windows/IIS, validar permisos de escritura para el usuario que ejecuta el sitio o el application pool sobre la carpeta del proyecto y especialmente sobre `var/`.
+
+### Carpetas que deben existir
+
+Si no existen, deben crearse antes de usar importaciones o ejecutar en producción:
+
+```text
+var/
+var/imports/
+var/cache/
+var/log/
+var/cache/prod/doctrine/orm/Proxies/
+```
+
+### Carga de productos por Excel
+
+La carga de productos usa la carpeta:
+
+```text
+var/imports
+```
+
+Si esta carpeta no existe o no tiene permisos de escritura, la importación puede fallar al subir o procesar archivos.
+
+### Dependencias PHP requeridas para importación
+
+Validar que la extensión `zip` esté habilitada en PHP para permitir el uso correcto de PhpSpreadsheet.
+
+En Windows/Laragon normalmente se habilita en `php.ini`:
+
+```ini
+extension=zip
+```
+
+Después de habilitarla:
+
+```bash
+composer install
+php bin/console cache:clear
+```
+
+### Limpiar caché después de cambios de configuración
+
+Cada vez que se agreguen variables de entorno, cambien permisos o se creen carpetas requeridas, ejecutar:
+
+```bash
+php bin/console cache:clear
+```
+
+## Variable de operación para inicialización y producción
+
+Se agregó la variable de entorno:
+
+```env
+APP_OPERATION_MODE=INICIALIZANDO
+```
+
+Valores permitidos:
+
+- `INICIALIZANDO`
+- `PRODUCCION`
+
+Si no se define, el backend asume:
+
+```env
+APP_OPERATION_MODE=PRODUCCION
+```
+
+### Comportamiento en `INICIALIZANDO`
+
+- permite borrar unidades de paca en estados reservados, vendidos y otros usados durante setup inicial
+- permite borrar una `paca` limpiando primero unidades, pedidos de venta, envíos y movimientos relacionados
+- pensado solo para carga inicial, depuración de datos o reinicialización controlada
+
+### Comportamiento en `PRODUCCION`
+
+- solo permite borrar unidades `AVAILABLE`
+- no permite borrar unidades `RESERVED` o `SOLD`
+- no permite borrar una `paca` si todavía tiene unidades asociadas
+
+### Dónde agregar la variable
+
+Localmente puede agregarse en:
+
+```text
+.env.local
+```
+
+En servidor debe configurarse en las variables de entorno reales del ambiente o en el archivo de entorno correspondiente.
+
+Ejemplo local para setup inicial:
+
+```env
+APP_OPERATION_MODE=INICIALIZANDO
+```
+
+Ejemplo cuando ya no debe permitir borrado profundo:
+
+```env
+APP_OPERATION_MODE=PRODUCCION
+```
+
+## Pasos recomendados después de agregar la variable
+
+```bash
+php bin/console cache:clear
+php bin/console doctrine:migrations:migrate
+php bin/console app:seed-modules
+```
+
+Si se usa importación de productos y hay errores por clases faltantes o ZIP:
+
+```bash
+composer install
+php bin/console cache:clear
+```
+
 ## Estructura del proyecto
 
 ```

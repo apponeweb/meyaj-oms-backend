@@ -20,6 +20,7 @@ use App\Repository\PacaRepository;
 use App\Repository\PacaUnitRepository;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\HttpKernel\Exception\BadRequestHttpException;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 
 final readonly class PacaService
@@ -30,6 +31,7 @@ final readonly class PacaService
         private PacaUnitRepository $pacaUnitRepo,
         private Paginator $paginator,
         private InventoryManager $inventoryManager,
+        private OperationMode $operationMode,
     ) {}
 
     public function list(
@@ -136,6 +138,18 @@ final readonly class PacaService
     {
         $p = $this->pacaRepository->find($id);
         if ($p === null) throw new NotFoundHttpException(sprintf('Paca con ID %d no encontrada.', $id));
+        if ($this->operationMode->isInitializing()) {
+            $this->deleteForInitialization($p);
+            return;
+        }
+        $unitsCount = $this->pacaUnitRepo->count(['paca' => $p]);
+        if ($unitsCount > 0) {
+            throw new BadRequestHttpException(sprintf(
+                'No se puede eliminar la paca %s porque tiene %d unidad(es) asociada(s). Elimine primero sus unidades de inventario.',
+                $p->getCode(),
+                $unitsCount,
+            ));
+        }
         $this->em->remove($p);
         $this->em->flush();
     }
@@ -193,6 +207,86 @@ final readonly class PacaService
         $available = $this->pacaUnitRepo->countAvailableByPaca($paca->getId());
         $stockByWarehouse = $this->pacaUnitRepo->countByPacaAndWarehouse($paca->getId());
         return new PacaResponse($paca, $available, $stockByWarehouse);
+    }
+
+    private function deleteForInitialization(Paca $paca): void
+    {
+        $unitIds = array_map(
+            static fn (PacaUnit $unit) => $unit->getId(),
+            $this->em->createQuery('SELECT pu FROM App\\Entity\\PacaUnit pu WHERE pu.paca = :paca')
+                ->setParameter('paca', $paca)
+                ->getResult(),
+        );
+
+        $salesOrderIds = array_map(
+            static fn (array $row) => (int) $row['id'],
+            $this->em->createQuery(
+                'SELECT DISTINCT so.id AS id
+                 FROM App\\Entity\\SalesOrder so
+                 INNER JOIN so.items soi
+                 WHERE soi.paca = :paca'
+            )
+                ->setParameter('paca', $paca)
+                ->getArrayResult(),
+        );
+
+        if (!empty($unitIds)) {
+            $this->em->createQuery('DELETE FROM App\\Entity\\ShipmentOrderItem soi WHERE soi.pacaUnit IN (:unitIds)')
+                ->setParameter('unitIds', $unitIds)
+                ->execute();
+
+            $this->em->createQuery('DELETE FROM App\\Entity\\InventoryMovement im WHERE im.pacaUnit IN (:unitIds)')
+                ->setParameter('unitIds', $unitIds)
+                ->execute();
+
+            $this->em->createQuery('DELETE FROM App\\Entity\\PacaUnit pu WHERE pu.id IN (:unitIds)')
+                ->setParameter('unitIds', $unitIds)
+                ->execute();
+        }
+
+        if (!empty($salesOrderIds)) {
+            $shipmentIds = array_map(
+                static fn (array $row) => (int) $row['id'],
+                $this->em->createQuery('SELECT sh.id AS id FROM App\\Entity\\ShipmentOrder sh WHERE sh.salesOrder IN (:salesOrderIds)')
+                    ->setParameter('salesOrderIds', $salesOrderIds)
+                    ->getArrayResult(),
+            );
+
+            if (!empty($shipmentIds)) {
+                $this->em->createQuery('DELETE FROM App\\Entity\\ShipmentOrderItem soi WHERE soi.shipmentOrder IN (:shipmentIds)')
+                    ->setParameter('shipmentIds', $shipmentIds)
+                    ->execute();
+
+                $this->em->createQuery("DELETE FROM App\\Entity\\InventoryMovement im WHERE im.referenceType = :shipmentType AND im.referenceId IN (:shipmentIds)")
+                    ->setParameter('shipmentType', 'shipment_order')
+                    ->setParameter('shipmentIds', $shipmentIds)
+                    ->execute();
+
+                $this->em->createQuery('DELETE FROM App\\Entity\\ShipmentOrder sh WHERE sh.id IN (:shipmentIds)')
+                    ->setParameter('shipmentIds', $shipmentIds)
+                    ->execute();
+            }
+
+            $this->em->createQuery("DELETE FROM App\\Entity\\InventoryMovement im WHERE im.referenceType = :salesType AND im.referenceId IN (:salesOrderIds)")
+                ->setParameter('salesType', 'sales_order')
+                ->setParameter('salesOrderIds', $salesOrderIds)
+                ->execute();
+
+            $this->em->createQuery('DELETE FROM App\\Entity\\SalesOrderStatusHistory sosh WHERE sosh.salesOrder IN (:salesOrderIds)')
+                ->setParameter('salesOrderIds', $salesOrderIds)
+                ->execute();
+
+            $this->em->createQuery('DELETE FROM App\\Entity\\SalesOrderItem soi WHERE soi.salesOrder IN (:salesOrderIds)')
+                ->setParameter('salesOrderIds', $salesOrderIds)
+                ->execute();
+
+            $this->em->createQuery('DELETE FROM App\\Entity\\SalesOrder so WHERE so.id IN (:salesOrderIds)')
+                ->setParameter('salesOrderIds', $salesOrderIds)
+                ->execute();
+        }
+
+        $this->em->remove($paca);
+        $this->em->flush();
     }
 
     private function setRelations(Paca $p, ?int $brandId, ?int $labelId, ?int $qualityGradeId, ?int $seasonId, ?int $genderId, ?int $garmentTypeId, ?int $fabricTypeId, ?int $sizeProfileId, ?int $supplierId): void

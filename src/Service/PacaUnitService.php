@@ -23,6 +23,8 @@ final readonly class PacaUnitService
         private EntityManagerInterface $em,
         private PacaUnitRepository $pacaUnitRepo,
         private Paginator $paginator,
+        private InventoryManager $inventoryManager,
+        private OperationMode $operationMode,
     ) {}
 
     /**
@@ -169,6 +171,120 @@ final readonly class PacaUnitService
         return [
             'reserved' => $updated,
             'skipped'  => \count($ids) - $updated,
+        ];
+    }
+
+    /**
+     * Delete units in bulk. Only AVAILABLE units can be removed.
+     * @param array<int, int|string> $identifiers
+     * @return array{deleted: int, skipped: int}
+     */
+    public function deleteBulk(array $identifiers): array
+    {
+        if (empty($identifiers)) {
+            throw new BadRequestHttpException('Debe proporcionar al menos un ID.');
+        }
+
+        $numericIds = [];
+        $serials = [];
+
+        foreach ($identifiers as $identifier) {
+            if (is_int($identifier) || (is_string($identifier) && ctype_digit($identifier))) {
+                $value = (int) $identifier;
+                if ($value > 0) {
+                    $numericIds[] = $value;
+                }
+                continue;
+            }
+
+            if (is_string($identifier) && trim($identifier) !== '') {
+                $serials[] = trim($identifier);
+            }
+        }
+
+        if (empty($numericIds) && empty($serials)) {
+            throw new BadRequestHttpException('Los identificadores proporcionados no son válidos.');
+        }
+
+        $qb = $this->pacaUnitRepo->createQueryBuilder('u')
+            ->leftJoin('u.paca', 'p')->addSelect('p');
+
+        if (!empty($numericIds) && !empty($serials)) {
+            $qb->where('u.id IN (:ids) OR u.serial IN (:serials)')
+                ->setParameter('ids', array_values(array_unique($numericIds)))
+                ->setParameter('serials', array_values(array_unique($serials)));
+        } elseif (!empty($numericIds)) {
+            $qb->where('u.id IN (:ids)')
+                ->setParameter('ids', array_values(array_unique($numericIds)));
+        } else {
+            $qb->where('u.serial IN (:serials)')
+                ->setParameter('serials', array_values(array_unique($serials)));
+        }
+
+        $units = $qb->getQuery()->getResult();
+
+        if (empty($units)) {
+            throw new NotFoundHttpException('No se encontraron unidades para eliminar.');
+        }
+
+        $affectedPacas = [];
+        $deleted = 0;
+        $skipped = 0;
+        $deletableStatuses = $this->operationMode->isInitializing()
+            ? [
+                PacaUnit::STATUS_AVAILABLE,
+                PacaUnit::STATUS_RESERVED,
+                PacaUnit::STATUS_SOLD,
+                PacaUnit::STATUS_PICKED,
+                PacaUnit::STATUS_DISPATCHED,
+                PacaUnit::STATUS_RETURNED,
+                PacaUnit::STATUS_DAMAGED,
+            ]
+            : [PacaUnit::STATUS_AVAILABLE];
+
+        $unitsToDelete = [];
+
+        foreach ($units as $unit) {
+            if (!$unit instanceof PacaUnit) {
+                continue;
+            }
+
+            if (!in_array($unit->getStatus(), $deletableStatuses, true)) {
+                $skipped++;
+                continue;
+            }
+
+            $paca = $unit->getPaca();
+            $affectedPacas[$paca->getId()] = $paca;
+            $unitsToDelete[] = $unit;
+        }
+
+        if (!empty($unitsToDelete)) {
+            $unitIds = array_map(static fn (PacaUnit $unit) => $unit->getId(), $unitsToDelete);
+
+            $this->em->createQuery('DELETE FROM App\\Entity\\ShipmentOrderItem soi WHERE soi.pacaUnit IN (:unitIds)')
+                ->setParameter('unitIds', $unitIds)
+                ->execute();
+
+            $this->em->createQuery('DELETE FROM App\\Entity\\InventoryMovement im WHERE im.pacaUnit IN (:unitIds)')
+                ->setParameter('unitIds', $unitIds)
+                ->execute();
+
+            foreach ($unitsToDelete as $unit) {
+                $this->em->remove($unit);
+                $deleted++;
+            }
+        }
+
+        $this->em->flush();
+
+        foreach ($affectedPacas as $paca) {
+            $this->inventoryManager->updateCachedStock($paca);
+        }
+
+        return [
+            'deleted' => $deleted,
+            'skipped' => $skipped + max(0, \count($identifiers) - \count($units)),
         ];
     }
 }

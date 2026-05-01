@@ -20,6 +20,8 @@
 /public/uploads/
 ###< local uploads ###
 
+/specs/
+
 
 # macOS
 .DS_Store

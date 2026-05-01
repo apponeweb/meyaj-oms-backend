@@ -99,6 +99,30 @@ final class PacaUnitController extends AbstractController
         ]);
     }
 
+    #[Route('/delete', methods: ['POST'])]
+    #[OA\Post(summary: 'Eliminar unidades en lote (solo AVAILABLE)')]
+    public function deleteBulk(Request $request): JsonResponse
+    {
+        $data = json_decode($request->getContent(), true, 512, \JSON_THROW_ON_ERROR);
+        $ids  = $data['ids'] ?? [];
+
+        if (!is_array($ids) || empty($ids)) {
+            return $this->json(['error' => 'Se requiere array de IDs en "ids".'], Response::HTTP_BAD_REQUEST);
+        }
+
+        $result = $this->pacaUnitService->deleteBulk($ids);
+
+        return $this->json([
+            'deleted' => $result['deleted'],
+            'skipped' => $result['skipped'],
+            'message' => \sprintf(
+                '%d unidad(es) eliminada(s).%s',
+                $result['deleted'],
+                $result['skipped'] > 0 ? \sprintf(' %d omitida(s) por no estar disponibles o no existir.', $result['skipped']) : '',
+            ),
+        ]);
+    }
+
     #[Route('/{id}', methods: ['GET'], requirements: ['id' => '\d+'])]
     #[OA\Get(summary: 'Obtener unidad de paca por ID')]
     public function show(int $id): JsonResponse
