@@ -160,7 +160,7 @@ final readonly class PacaExcelService
             $rows = $sheet->toArray(null, true, true, true);
 
             if (\count($rows) < 2) {
-                throw new \RuntimeException('El archivo no contiene datos.');
+                throw new \RuntimeException('El archivo no contiene filas de productos para procesar.');
             }
 
             $headerRow = $rows[1] ?? [];
@@ -186,49 +186,49 @@ final readonly class PacaExcelService
             $processed = 0;
 
             foreach ($rows as $rowNum => $row) {
-                $code = trim((string) ($row[$colMap['código'] ?? $colMap['codigo'] ?? ''] ?? ''));
-                if ($code === '') {
-                    $processed++;
-                    $log->setProcessedRows($processed);
-                    $this->em->flush();
-                    continue;
-                }
-
-                $name = trim((string) ($row[$colMap['nombre'] ?? ''] ?? ''));
-                if ($name === '') {
-                    $errors[] = "Fila {$rowNum}: El nombre es obligatorio para el código '{$code}'.";
-                    $processed++;
-                    $log->setProcessedRows($processed);
-                    $log->setErrors($errors);
-                    $log->setErrorCount(\count($errors));
-                    $this->em->flush();
-                    continue;
-                }
-
-                $nameLower = mb_strtolower($name);
-                if (isset($namesInFile[$nameLower]) && $namesInFile[$nameLower] !== $code) {
-                    $errors[] = "Fila {$rowNum}: El nombre '{$name}' está duplicado en el archivo (ya en código '{$namesInFile[$nameLower]}').";
-                    $processed++;
-                    $log->setProcessedRows($processed);
-                    $log->setErrors($errors);
-                    $log->setErrorCount(\count($errors));
-                    $this->em->flush();
-                    continue;
-                }
-
-                if (isset($existingNames[$nameLower]) && $existingNames[$nameLower] !== $code) {
-                    $errors[] = "Fila {$rowNum}: El nombre '{$name}' ya existe en la BD (código '{$existingNames[$nameLower]}').";
-                    $processed++;
-                    $log->setProcessedRows($processed);
-                    $log->setErrors($errors);
-                    $log->setErrorCount(\count($errors));
-                    $this->em->flush();
-                    continue;
-                }
-
-                $namesInFile[$nameLower] = $code;
-
                 try {
+                    $code = trim((string) ($row[$colMap['código'] ?? $colMap['codigo'] ?? ''] ?? ''));
+                    if ($code === '') {
+                        $processed++;
+                        $log->setProcessedRows($processed);
+                        $this->em->flush();
+                        continue;
+                    }
+
+                    $name = trim((string) ($row[$colMap['nombre'] ?? ''] ?? ''));
+                    if ($name === '') {
+                        $errors[] = "Fila {$rowNum}: El nombre es obligatorio para el código '{$code}'.";
+                        $processed++;
+                        $log->setProcessedRows($processed);
+                        $log->setErrors($errors);
+                        $log->setErrorCount(\count($errors));
+                        $this->em->flush();
+                        continue;
+                    }
+
+                    $nameLower = mb_strtolower($name);
+                    if (isset($namesInFile[$nameLower]) && $namesInFile[$nameLower] !== $code) {
+                        $errors[] = "Fila {$rowNum}: El nombre '{$name}' está duplicado en el archivo (ya en código '{$namesInFile[$nameLower]}').";
+                        $processed++;
+                        $log->setProcessedRows($processed);
+                        $log->setErrors($errors);
+                        $log->setErrorCount(\count($errors));
+                        $this->em->flush();
+                        continue;
+                    }
+
+                    if (isset($existingNames[$nameLower]) && $existingNames[$nameLower] !== $code) {
+                        $errors[] = "Fila {$rowNum}: El nombre '{$name}' ya existe en la BD (código '{$existingNames[$nameLower]}').";
+                        $processed++;
+                        $log->setProcessedRows($processed);
+                        $log->setErrors($errors);
+                        $log->setErrorCount(\count($errors));
+                        $this->em->flush();
+                        continue;
+                    }
+
+                    $namesInFile[$nameLower] = $code;
+
                     $existingPaca = $this->pacaRepository->findOneBy(['code' => $code]);
                     $isNew = $existingPaca === null;
                     $paca = $existingPaca ?? new Paca();
@@ -247,7 +247,11 @@ final readonly class PacaExcelService
 
                     $this->syncUnitsForImport($paca, $warehouse, $isNew, $replaceUnits);
                 } catch (\Throwable $e) {
-                    $errors[] = "Fila {$rowNum} (código '{$code}'): " . $e->getMessage();
+                    $errors[] = "Fila {$rowNum}" . (isset($code) && $code !== '' ? " (código '{$code}')" : '') . ': ' . $this->normalizeImportErrorMessage($e);
+
+                    if (!$this->em->isOpen()) {
+                        throw $e;
+                    }
                 }
 
                 $processed++;
@@ -263,10 +267,12 @@ final readonly class PacaExcelService
             $log->setCompletedAt(new \DateTimeImmutable());
             $this->em->flush();
         } catch (\Throwable $e) {
-            $log->setStatus(PacaImportLog::STATUS_FAILED);
-            $log->addError($e->getMessage());
-            $log->setCompletedAt(new \DateTimeImmutable());
-            $this->em->flush();
+            if ($this->em->isOpen()) {
+                $log->setStatus(PacaImportLog::STATUS_FAILED);
+                $log->addError($this->normalizeImportErrorMessage($e));
+                $log->setCompletedAt(new \DateTimeImmutable());
+                $this->em->flush();
+            }
 
             throw $e;
         } finally {
@@ -291,25 +297,19 @@ final readonly class PacaExcelService
         }
 
         if ($replaceUnits) {
-            // Delete all AVAILABLE units and recreate from serial 1
             $this->em->createQuery(
                 "DELETE FROM App\Entity\PacaUnit u WHERE u.paca = :paca AND u.status = 'AVAILABLE'"
             )->setParameter('paca', $paca)->execute();
 
             if ($stock > 0) {
-                $this->createUnitsForImport($paca, $warehouse, $stock, 0);
+                $this->createUnitsForImport($paca, $warehouse, $stock, $this->getHighestSerialOffset($paca));
             }
             return;
         }
 
-        // Continue mode: add units to reach desired stock, continuing from highest serial
         if ($stock <= 0) {
             return;
         }
-
-        $totalUnits = (int) $this->em->createQuery(
-            'SELECT COUNT(u.id) FROM App\Entity\PacaUnit u WHERE u.paca = :paca'
-        )->setParameter('paca', $paca)->getSingleScalarResult();
 
         $availableUnits = (int) $this->em->createQuery(
             "SELECT COUNT(u.id) FROM App\Entity\PacaUnit u WHERE u.paca = :paca AND u.status = 'AVAILABLE'"
@@ -317,7 +317,7 @@ final readonly class PacaExcelService
 
         $delta = $stock - $availableUnits;
         if ($delta > 0) {
-            $this->createUnitsForImport($paca, $warehouse, $delta, $totalUnits);
+            $this->createUnitsForImport($paca, $warehouse, $delta, $this->getHighestSerialOffset($paca));
         }
     }
 
@@ -331,6 +331,34 @@ final readonly class PacaExcelService
             $unit->setStatus(PacaUnit::STATUS_AVAILABLE);
             $this->em->persist($unit);
         }
+    }
+
+    private function getHighestSerialOffset(Paca $paca): int
+    {
+        $serials = $this->em->createQuery(
+            'SELECT u.serial FROM App\Entity\PacaUnit u WHERE u.paca = :paca'
+        )
+            ->setParameter('paca', $paca)
+            ->getSingleColumnResult();
+
+        $max = 0;
+        foreach ($serials as $serial) {
+            if (!is_string($serial)) {
+                continue;
+            }
+
+            $suffix = strrchr($serial, '-');
+            if ($suffix === false) {
+                continue;
+            }
+
+            $number = (int) ltrim($suffix, '-');
+            if ($number > $max) {
+                $max = $number;
+            }
+        }
+
+        return $max;
     }
 
     // ── Get import status (for polling) ──────────────────────────────
@@ -468,5 +496,61 @@ final readonly class PacaExcelService
             $map[$key] = $lookup;
         }
         return $map;
+    }
+
+    private function normalizeImportErrorMessage(\Throwable $e): string
+    {
+        $message = trim($e->getMessage());
+        $lowerMessage = mb_strtolower($message);
+
+        if ($message === '') {
+            return 'Ocurrió un error inesperado al procesar la importación.';
+        }
+
+        if (str_contains($lowerMessage, 'entitymanager is closed')) {
+            return 'La importación se detuvo por un error interno después de procesar una fila. Revise los errores registrados anteriormente para identificar la causa original.';
+        }
+
+        if (str_contains($lowerMessage, 'duplicate entry')) {
+            if (str_contains($lowerMessage, 'serial')) {
+                return 'La paca ya existe y se intentó crear una unidad con un serial repetido. El producto existente debe actualizar stock sin reutilizar seriales ya creados.';
+            }
+
+            if (str_contains($lowerMessage, 'code')) {
+                return 'Ya existe una paca con el mismo código. Verifique que el código del archivo no esté duplicado.';
+            }
+
+            if (str_contains($lowerMessage, 'name')) {
+                return 'Ya existe una paca con el mismo nombre. Verifique nombres duplicados en el archivo o en la base de datos.';
+            }
+
+            return 'Se detectó un valor duplicado en la base de datos. Revise códigos, nombres y seriales del archivo.';
+        }
+
+        if (str_contains($lowerMessage, 'integrity constraint violation') || str_contains($lowerMessage, 'foreign key constraint fails')) {
+            return 'No se pudo guardar la información porque una relación requerida no existe o está siendo usada por otros registros.';
+        }
+
+        if (str_contains($lowerMessage, 'not null')) {
+            return 'Falta un dato obligatorio para guardar una de las filas del archivo.';
+        }
+
+        if (str_contains($lowerMessage, 'archivo de importación no encontrado')) {
+            return 'El archivo temporal de importación no fue encontrado. Vuelva a subir el archivo e inténtelo de nuevo.';
+        }
+
+        if (str_contains($lowerMessage, 'la bodega especificada no existe')) {
+            return 'La bodega seleccionada no existe o ya no está disponible.';
+        }
+
+        if (str_contains($lowerMessage, 'esta importación ya fue procesada')) {
+            return 'Esta importación ya fue procesada anteriormente. Suba un archivo nuevo si desea volver a importar.';
+        }
+
+        if (str_contains($lowerMessage, 'el archivo no contiene')) {
+            return $message;
+        }
+
+        return $message;
     }
 }
