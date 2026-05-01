@@ -5,8 +5,11 @@ declare(strict_types=1);
 namespace App\Service;
 
 use App\DTO\Response\PacaUnitResponse;
+use App\Entity\InventoryMovement;
+use App\Entity\InventoryReason;
 use App\Entity\Paca;
 use App\Entity\PacaUnit;
+use App\Entity\User;
 use App\Entity\Warehouse;
 use App\Entity\WarehouseBin;
 use App\Pagination\PaginatedResponse;
@@ -24,7 +27,6 @@ final readonly class PacaUnitService
         private PacaUnitRepository $pacaUnitRepo,
         private Paginator $paginator,
         private InventoryManager $inventoryManager,
-        private OperationMode $operationMode,
     ) {}
 
     /**
@@ -68,6 +70,144 @@ final readonly class PacaUnitService
         $u = $this->pacaUnitRepo->find($id);
         if ($u === null) throw new NotFoundHttpException(\sprintf('Unidad de paca con ID %d no encontrada.', $id));
         return new PacaUnitResponse($u);
+    }
+
+    /**
+     * @param int[] $ids
+     * @return array{transferred: int, skipped: int, message: string}
+     */
+    public function transferBulk(
+        array $ids,
+        Warehouse $destinationWarehouse,
+        ?WarehouseBin $destinationBin,
+        InventoryReason $reason,
+        User $user,
+    ): array {
+        if (empty($ids)) {
+            throw new BadRequestHttpException('Debe proporcionar al menos un ID para traspasar.');
+        }
+
+        $units = $this->pacaUnitRepo->createQueryBuilder('u')
+            ->leftJoin('u.paca', 'p')->addSelect('p')
+            ->leftJoin('u.warehouse', 'w')->addSelect('w')
+            ->where('u.id IN (:ids)')
+            ->setParameter('ids', array_values(array_unique(array_map('intval', $ids))))
+            ->getQuery()
+            ->getResult();
+
+        if (empty($units)) {
+            throw new NotFoundHttpException('No se encontraron unidades para traspasar.');
+        }
+
+        $transferOutReason = $this->em->getRepository(InventoryReason::class)->findOneBy(['code' => InventoryReason::CODE_TRANSFER_OUT]);
+        $transferInReason = $this->em->getRepository(InventoryReason::class)->findOneBy(['code' => InventoryReason::CODE_TRANSFER_IN]);
+
+        if ($transferOutReason === null || $transferInReason === null) {
+            throw new BadRequestHttpException('No están configurados los motivos de traspaso de inventario.');
+        }
+
+        $transferred = 0;
+        $skipped = 0;
+        $affectedPairs = [];
+        $movementGroups = [];
+
+        foreach ($units as $unit) {
+            if (!$unit instanceof PacaUnit) {
+                continue;
+            }
+
+            if (!$unit->isAvailable()) {
+                $skipped++;
+                continue;
+            }
+
+            $sourceWarehouse = $unit->getWarehouse();
+            if ($sourceWarehouse->getId() === $destinationWarehouse->getId()) {
+                $sameBin = ($unit->getWarehouseBin()?->getId() ?? null) === ($destinationBin?->getId() ?? null);
+                if ($sameBin) {
+                    $skipped++;
+                    continue;
+                }
+            }
+
+            $sourceKey = sprintf('%d-%d', $unit->getPaca()->getId(), $sourceWarehouse->getId());
+            $destinationKey = sprintf('%d-%d', $unit->getPaca()->getId(), $destinationWarehouse->getId());
+
+            if (!isset($movementGroups[$sourceKey])) {
+                $movementGroups[$sourceKey] = [
+                    'paca' => $unit->getPaca(),
+                    'warehouse' => $sourceWarehouse,
+                    'quantityOut' => 0,
+                ];
+            }
+            if (!isset($movementGroups[$destinationKey])) {
+                $movementGroups[$destinationKey] = [
+                    'paca' => $unit->getPaca(),
+                    'warehouse' => $destinationWarehouse,
+                    'quantityIn' => 0,
+                ];
+            }
+
+            $movementGroups[$sourceKey]['quantityOut'] = ($movementGroups[$sourceKey]['quantityOut'] ?? 0) + 1;
+            $movementGroups[$destinationKey]['quantityIn'] = ($movementGroups[$destinationKey]['quantityIn'] ?? 0) + 1;
+
+            $unit->setWarehouse($destinationWarehouse);
+            $unit->setWarehouseBin($destinationBin);
+            $transferred++;
+
+            $affectedPairs[$sourceKey] = [$unit->getPaca(), $sourceWarehouse];
+            $affectedPairs[$destinationKey] = [$unit->getPaca(), $destinationWarehouse];
+        }
+
+        $this->em->flush();
+
+        foreach ($movementGroups as $group) {
+            /** @var Paca $paca */
+            $paca = $group['paca'];
+            /** @var Warehouse $warehouse */
+            $warehouse = $group['warehouse'];
+
+            if (($group['quantityOut'] ?? 0) > 0) {
+                $this->recordTransferMovement(
+                    paca: $paca,
+                    warehouse: $warehouse,
+                    bin: null,
+                    reason: $transferOutReason,
+                    user: $user,
+                    quantityIn: 0,
+                    quantityOut: (int) $group['quantityOut'],
+                    notes: sprintf('Traspaso masivo hacia %s. Motivo: %s', $destinationWarehouse->getName(), $reason->getName()),
+                );
+            }
+
+            if (($group['quantityIn'] ?? 0) > 0) {
+                $this->recordTransferMovement(
+                    paca: $paca,
+                    warehouse: $warehouse,
+                    bin: $warehouse->getId() === $destinationWarehouse->getId() ? $destinationBin : null,
+                    reason: $transferInReason,
+                    user: $user,
+                    quantityIn: (int) $group['quantityIn'],
+                    quantityOut: 0,
+                    notes: sprintf('Traspaso masivo desde otra bodega. Motivo: %s', $reason->getName()),
+                );
+            }
+        }
+
+        foreach ($affectedPairs as [$paca]) {
+            $this->inventoryManager->updateCachedStock($paca);
+        }
+
+        return [
+            'transferred' => $transferred,
+            'skipped' => $skipped + max(0, count($ids) - count($units)),
+            'message' => sprintf(
+                '%d unidad(es) traspasada(s) a %s.%s',
+                $transferred,
+                $destinationWarehouse->getName(),
+                $skipped > 0 ? sprintf(' %d omitida(s) por no estar disponibles o no requerir cambio.', $skipped) : '',
+            ),
+        ];
     }
 
     public function findBySerial(string $serial): PacaUnitResponse
@@ -115,9 +255,50 @@ final readonly class PacaUnitService
             ));
         }
 
+        $sourceWarehouse = $u->getWarehouse();
+        $sourceBin = $u->getWarehouseBin();
+
+        $sameWarehouse = $sourceWarehouse->getId() === $warehouse->getId();
+        $sameBin = ($sourceBin?->getId() ?? null) === ($bin?->getId() ?? null);
+        if ($sameWarehouse && $sameBin) {
+            return new PacaUnitResponse($u);
+        }
+
+        $transferOutReason = $this->em->getRepository(InventoryReason::class)->findOneBy(['code' => InventoryReason::CODE_TRANSFER_OUT]);
+        $transferInReason = $this->em->getRepository(InventoryReason::class)->findOneBy(['code' => InventoryReason::CODE_TRANSFER_IN]);
+        if ($transferOutReason === null || $transferInReason === null) {
+            throw new BadRequestHttpException('No están configurados los motivos de traspaso de inventario.');
+        }
+
         $u->setWarehouse($warehouse);
         $u->setWarehouseBin($bin);
         $this->em->flush();
+
+        $systemUser = $this->resolveSystemUser();
+        if ($systemUser !== null) {
+            $this->recordTransferMovement(
+                paca: $u->getPaca(),
+                warehouse: $sourceWarehouse,
+                bin: $sourceBin,
+                reason: $transferOutReason,
+                user: $systemUser,
+                quantityIn: 0,
+                quantityOut: 1,
+                notes: sprintf('Traspaso individual de unidad %s hacia %s', $u->getSerial(), $warehouse->getName()),
+            );
+            $this->recordTransferMovement(
+                paca: $u->getPaca(),
+                warehouse: $warehouse,
+                bin: $bin,
+                reason: $transferInReason,
+                user: $systemUser,
+                quantityIn: 1,
+                quantityOut: 0,
+                notes: sprintf('Recepción por traspaso individual de unidad %s desde %s', $u->getSerial(), $sourceWarehouse->getName()),
+            );
+        }
+
+        $this->inventoryManager->updateCachedStock($u->getPaca());
 
         return new PacaUnitResponse($u);
     }
@@ -175,7 +356,7 @@ final readonly class PacaUnitService
     }
 
     /**
-     * Delete units in bulk. Only AVAILABLE units can be removed.
+     * Retire units in bulk. Only AVAILABLE units can be adjusted out.
      * @param array<int, int|string> $identifiers
      * @return array{deleted: int, skipped: int}
      */
@@ -230,19 +411,18 @@ final readonly class PacaUnitService
         $affectedPacas = [];
         $deleted = 0;
         $skipped = 0;
-        $deletableStatuses = $this->operationMode->isInitializing()
-            ? [
-                PacaUnit::STATUS_AVAILABLE,
-                PacaUnit::STATUS_RESERVED,
-                PacaUnit::STATUS_SOLD,
-                PacaUnit::STATUS_PICKED,
-                PacaUnit::STATUS_DISPATCHED,
-                PacaUnit::STATUS_RETURNED,
-                PacaUnit::STATUS_DAMAGED,
-            ]
-            : [PacaUnit::STATUS_AVAILABLE];
+        $deletableStatuses = [PacaUnit::STATUS_AVAILABLE];
+        $lossReason = $this->em->getRepository(InventoryReason::class)->findOneBy(['code' => InventoryReason::CODE_LOSS]);
+        if ($lossReason === null) {
+            throw new BadRequestHttpException('No está configurado el motivo de baja de inventario.');
+        }
 
-        $unitsToDelete = [];
+        $systemUser = $this->resolveSystemUser();
+        if ($systemUser === null) {
+            throw new BadRequestHttpException('No se encontró un usuario del sistema para registrar el movimiento de inventario.');
+        }
+
+        $unitsToAdjust = [];
 
         foreach ($units as $unit) {
             if (!$unit instanceof PacaUnit) {
@@ -256,24 +436,22 @@ final readonly class PacaUnitService
 
             $paca = $unit->getPaca();
             $affectedPacas[$paca->getId()] = $paca;
-            $unitsToDelete[] = $unit;
+            $unitsToAdjust[] = $unit;
         }
 
-        if (!empty($unitsToDelete)) {
-            $unitIds = array_map(static fn (PacaUnit $unit) => $unit->getId(), $unitsToDelete);
-
-            $this->em->createQuery('DELETE FROM App\\Entity\\ShipmentOrderItem soi WHERE soi.pacaUnit IN (:unitIds)')
-                ->setParameter('unitIds', $unitIds)
-                ->execute();
-
-            $this->em->createQuery('DELETE FROM App\\Entity\\InventoryMovement im WHERE im.pacaUnit IN (:unitIds)')
-                ->setParameter('unitIds', $unitIds)
-                ->execute();
-
-            foreach ($unitsToDelete as $unit) {
-                $this->em->remove($unit);
-                $deleted++;
-            }
+        foreach ($unitsToAdjust as $unit) {
+            $unit->setStatus(PacaUnit::STATUS_DAMAGED);
+            $this->recordTransferMovement(
+                paca: $unit->getPaca(),
+                warehouse: $unit->getWarehouse(),
+                bin: $unit->getWarehouseBin(),
+                reason: $lossReason,
+                user: $systemUser,
+                quantityIn: 0,
+                quantityOut: 1,
+                notes: sprintf('Baja operativa de unidad %s desde módulo de unidades.', $unit->getSerial()),
+            );
+            $deleted++;
         }
 
         $this->em->flush();
@@ -286,5 +464,59 @@ final readonly class PacaUnitService
             'deleted' => $deleted,
             'skipped' => $skipped + max(0, \count($identifiers) - \count($units)),
         ];
+    }
+
+    private function resolveSystemUser(): ?User
+    {
+        return $this->em->getRepository(User::class)->findOneBy([], ['id' => 'ASC']);
+    }
+
+    private function recordTransferMovement(
+        Paca $paca,
+        Warehouse $warehouse,
+        ?WarehouseBin $bin,
+        InventoryReason $reason,
+        User $user,
+        int $quantityIn,
+        int $quantityOut,
+        string $notes,
+    ): void {
+        $movement = new InventoryMovement();
+        $movement->setCompany($warehouse->getCompany());
+        $movement->setPaca($paca);
+        $movement->setWarehouse($warehouse);
+        $movement->setWarehouseBin($bin);
+        $movement->setReason($reason);
+        $movement->setUser($user);
+        $movement->setMovementType($reason->getDirection());
+        $movement->setReferenceType('bulk_transfer');
+        $movement->setReferenceId(null);
+        $movement->setQtyIn($quantityIn);
+        $movement->setQtyOut($quantityOut);
+        $movement->setBalanceAfter($this->countTrackedUnitsInWarehouse($paca, $warehouse));
+        $movement->setUnitCost($paca->getPurchasePrice());
+        $movement->setNotes($notes);
+
+        $this->em->persist($movement);
+        $this->em->flush();
+    }
+
+    private function countTrackedUnitsInWarehouse(Paca $paca, Warehouse $warehouse): int
+    {
+        return (int) $this->em->createQueryBuilder()
+            ->select('COUNT(u.id)')
+            ->from(PacaUnit::class, 'u')
+            ->where('u.paca = :paca')
+            ->andWhere('u.warehouse = :warehouse')
+            ->andWhere('u.status IN (:statuses)')
+            ->setParameter('paca', $paca)
+            ->setParameter('warehouse', $warehouse)
+            ->setParameter('statuses', [
+                PacaUnit::STATUS_AVAILABLE,
+                PacaUnit::STATUS_RESERVED,
+                PacaUnit::STATUS_PICKED,
+            ])
+            ->getQuery()
+            ->getSingleScalarResult();
     }
 }

@@ -37,7 +37,9 @@ class InventoryMovementRepository extends ServiceEntityRepository
             ->leftJoin('m.reason', 'r')
             ->addSelect('r')
             ->leftJoin('m.user', 'u')
-            ->addSelect('u');
+            ->addSelect('u')
+            ->orderBy('m.createdAt', 'DESC')
+            ->addOrderBy('m.id', 'DESC');
 
         if ($search !== null && $search !== '') {
             $qb->andWhere('p.code LIKE :search OR p.name LIKE :search OR r.name LIKE :search')

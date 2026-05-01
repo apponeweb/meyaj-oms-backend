@@ -7,6 +7,7 @@ namespace App\Service;
 use App\DTO\Request\CreatePacaRequest;
 use App\DTO\Request\UpdatePacaRequest;
 use App\DTO\Response\PacaResponse;
+use App\Entity\InventoryMovement;
 use App\Entity\InventoryReason;
 use App\Entity\Paca;
 use App\Entity\PacaUnit;
@@ -55,12 +56,20 @@ final readonly class PacaService
         $result = $this->paginator->paginate($qb, $pagination);
 
         $pacaIds = array_map(static fn (Paca $p) => $p->getId(), $result->data);
-        $availableStock = $this->pacaUnitRepo->countAvailableByPacaIds($pacaIds);
+        $hasLocationFilter = $warehouseId !== null || $warehouseBinId !== null;
+        $availableStock = $hasLocationFilter
+            ? $this->pacaUnitRepo->countAvailableByPacaIdsFiltered($pacaIds, $warehouseId, $warehouseBinId)
+            : $this->pacaUnitRepo->countAvailableByPacaIds($pacaIds);
+        $trackedStock = $hasLocationFilter
+            ? $this->pacaUnitRepo->countTrackedByPacaIdsFiltered($pacaIds, $warehouseId, $warehouseBinId)
+            : $this->pacaUnitRepo->countTrackedByPacaIds($pacaIds);
 
         return new PaginatedResponse(
             data: array_map(static fn (Paca $p) => new PacaResponse(
                 $p,
                 $availableStock[$p->getId()] ?? 0,
+                null,
+                $trackedStock[$p->getId()] ?? 0,
             ), $result->data),
             meta: $result->meta,
         );
@@ -72,7 +81,8 @@ final readonly class PacaService
         if ($p === null) throw new NotFoundHttpException(\sprintf('Paca con ID %d no encontrada.', $id));
         $availableStock = $this->pacaUnitRepo->countAvailableByPaca($p);
         $stockByWarehouse = $this->pacaUnitRepo->countByPacaAndWarehouse($p);
-        return new PacaResponse($p, $availableStock, $stockByWarehouse);
+        $trackedStock = $this->pacaUnitRepo->countTrackedByPaca($p->getId());
+        return new PacaResponse($p, $availableStock, $stockByWarehouse, $trackedStock);
     }
 
     public function getNextCode(): array
@@ -169,6 +179,17 @@ final readonly class PacaService
         $warehouseBin = null;
         if ($warehouseBinId !== null) {
             $warehouseBin = $this->em->find(WarehouseBin::class, $warehouseBinId);
+            if ($warehouseBin === null) {
+                throw new NotFoundHttpException(sprintf('Ubicación con ID %d no encontrada.', $warehouseBinId));
+            }
+
+            if ($warehouseBin->getWarehouse()->getId() !== $warehouse->getId()) {
+                throw new BadRequestHttpException(sprintf(
+                    'La ubicación %s no pertenece al almacén %s.',
+                    $warehouseBin->getName(),
+                    $warehouse->getName(),
+                ));
+            }
         }
 
         // Create PacaUnits
@@ -184,29 +205,101 @@ final readonly class PacaService
             $this->em->persist($unit);
         }
 
-        // Record inventory movement
-        $reason = $this->em->getRepository(InventoryReason::class)->findOneBy(['code' => 'ADJUSTMENT_IN']);
-        if ($reason !== null && $user !== null) {
-            $this->inventoryManager->recordMovement(
-                paca: $paca,
-                warehouse: $warehouse,
-                bin: $warehouseBin,
-                reason: $reason,
-                user: $user,
-                quantity: $quantity,
-                referenceType: 'manual_stock',
-                notes: sprintf('Carga de stock manual: %d unidades en %s', $quantity, $warehouse->getName()),
-            );
-        }
-
         $this->em->flush();
 
-        // Refresh stock
         $this->inventoryManager->updateCachedStock($paca);
+
+        // Record inventory movement
+        if ($user === null) {
+            throw new BadRequestHttpException('No se pudo identificar el usuario para registrar el movimiento de inventario.');
+        }
+
+        $reason = $this->resolveAdjustmentInReason();
+        $this->recordAddStockMovement(
+            paca: $paca,
+            warehouse: $warehouse,
+            warehouseBin: $warehouseBin,
+            reason: $reason,
+            user: $user,
+            quantity: $quantity,
+            notes: sprintf('Carga de stock manual: %d unidades en %s', $quantity, $warehouse->getName()),
+        );
 
         $available = $this->pacaUnitRepo->countAvailableByPaca($paca->getId());
         $stockByWarehouse = $this->pacaUnitRepo->countByPacaAndWarehouse($paca->getId());
-        return new PacaResponse($paca, $available, $stockByWarehouse);
+        $trackedStock = $this->pacaUnitRepo->countTrackedByPaca($paca->getId());
+        return new PacaResponse($paca, $available, $stockByWarehouse, $trackedStock);
+    }
+
+    private function recordAddStockMovement(
+        Paca $paca,
+        Warehouse $warehouse,
+        ?WarehouseBin $warehouseBin,
+        InventoryReason $reason,
+        User $user,
+        int $quantity,
+        string $notes,
+    ): void {
+        $movement = new InventoryMovement();
+        $movement->setCompany($warehouse->getCompany());
+        $movement->setPaca($paca);
+        $movement->setWarehouse($warehouse);
+        $movement->setWarehouseBin($warehouseBin);
+        $movement->setReason($reason);
+        $movement->setUser($user);
+        $movement->setMovementType($reason->getDirection());
+        $movement->setReferenceType('manual_stock');
+        $movement->setReferenceId(null);
+        $movement->setQtyIn($quantity);
+        $movement->setQtyOut(0);
+        $movement->setBalanceAfter($this->countTrackedUnitsInWarehouse($paca, $warehouse));
+        $movement->setUnitCost($paca->getPurchasePrice());
+        $movement->setNotes($notes);
+
+        $this->em->persist($movement);
+        $this->em->flush();
+    }
+
+    private function countTrackedUnitsInWarehouse(Paca $paca, Warehouse $warehouse): int
+    {
+        return (int) $this->em->createQueryBuilder()
+            ->select('COUNT(u.id)')
+            ->from(PacaUnit::class, 'u')
+            ->where('u.paca = :paca')
+            ->andWhere('u.warehouse = :warehouse')
+            ->andWhere('u.status IN (:statuses)')
+            ->setParameter('paca', $paca)
+            ->setParameter('warehouse', $warehouse)
+            ->setParameter('statuses', [
+                PacaUnit::STATUS_AVAILABLE,
+                PacaUnit::STATUS_RESERVED,
+                PacaUnit::STATUS_PICKED,
+            ])
+            ->getQuery()
+            ->getSingleScalarResult();
+    }
+
+    private function resolveAdjustmentInReason(): InventoryReason
+    {
+        $reason = $this->em->getRepository(InventoryReason::class)->findOneBy([
+            'code' => InventoryReason::CODE_ADJ_IN,
+        ]);
+
+        if ($reason instanceof InventoryReason) {
+            return $reason;
+        }
+
+        $reason = new InventoryReason();
+        $reason->setCode(InventoryReason::CODE_ADJ_IN);
+        $reason->setName('Ajuste Entrada');
+        $reason->setDirection('IN');
+        $reason->setRequiresReference(false);
+        $reason->setIsActive(true);
+
+        $this->em->persist($reason);
+        $this->em->flush();
+
+        return $reason;
     }
 
     private function deleteForInitialization(Paca $paca): void

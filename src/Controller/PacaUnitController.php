@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Controller;
 
+use App\Entity\InventoryReason;
+use App\Entity\User;
 use App\Entity\Warehouse;
 use App\Entity\WarehouseBin;
 use App\Pagination\PaginationRequest;
@@ -121,6 +123,60 @@ final class PacaUnitController extends AbstractController
                 $result['skipped'] > 0 ? \sprintf(' %d omitida(s) por no estar disponibles o no existir.', $result['skipped']) : '',
             ),
         ]);
+    }
+
+    #[Route('/transfer', methods: ['POST'])]
+    #[OA\Post(summary: 'Traspasar unidades seleccionadas a otra bodega')]
+    public function transferBulk(Request $request): JsonResponse
+    {
+        $data = json_decode($request->getContent(), true, 512, \JSON_THROW_ON_ERROR);
+        $ids = $data['ids'] ?? [];
+        $warehouseId = isset($data['warehouseId']) ? (int) $data['warehouseId'] : null;
+        $reasonId = isset($data['reasonId']) ? (int) $data['reasonId'] : null;
+
+        if (!is_array($ids) || empty($ids)) {
+            return $this->json(['error' => 'Se requiere array de IDs en "ids".'], Response::HTTP_BAD_REQUEST);
+        }
+
+        if ($warehouseId === null || $warehouseId <= 0) {
+            return $this->json(['error' => 'warehouseId es requerido.'], Response::HTTP_BAD_REQUEST);
+        }
+
+        if ($reasonId === null || $reasonId <= 0) {
+            return $this->json(['error' => 'reasonId es requerido.'], Response::HTTP_BAD_REQUEST);
+        }
+
+        $warehouse = $this->em->getRepository(Warehouse::class)->find($warehouseId);
+        if ($warehouse === null) {
+            return $this->json(['error' => sprintf('Bodega con ID %d no encontrada.', $warehouseId)], Response::HTTP_NOT_FOUND);
+        }
+
+        $reason = $this->em->getRepository(InventoryReason::class)->find($reasonId);
+        if ($reason === null) {
+            return $this->json(['error' => sprintf('Motivo de movimiento con ID %d no encontrado.', $reasonId)], Response::HTTP_NOT_FOUND);
+        }
+
+        $bin = null;
+        $warehouseBinId = isset($data['warehouseBinId']) ? (int) $data['warehouseBinId'] : null;
+        if ($warehouseBinId !== null && $warehouseBinId > 0) {
+            $bin = $this->em->getRepository(WarehouseBin::class)->find($warehouseBinId);
+            if ($bin === null) {
+                return $this->json(['error' => sprintf('Ubicación con ID %d no encontrada.', $warehouseBinId)], Response::HTTP_NOT_FOUND);
+            }
+        }
+
+        /** @var User $user */
+        $user = $this->getUser();
+
+        $result = $this->pacaUnitService->transferBulk(
+            array_values(array_filter(array_map('intval', $ids), static fn (int $id) => $id > 0)),
+            $warehouse,
+            $bin,
+            $reason,
+            $user,
+        );
+
+        return $this->json($result);
     }
 
     #[Route('/{id}', methods: ['GET'], requirements: ['id' => '\d+'])]

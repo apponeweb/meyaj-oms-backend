@@ -35,7 +35,7 @@ final readonly class PacaResponse
     /**
      * @param array<array{warehouseId: int, warehouseName: string, available: int, reserved: int, total: int}>|null $stockByWarehouse
      */
-    public function __construct(Paca $p, ?int $availableStock = null, ?array $stockByWarehouse = null)
+    public function __construct(Paca $p, ?int $availableStock = null, ?array $stockByWarehouse = null, ?int $stock = null)
     {
         $this->id = $p->getId();
         $this->code = $p->getCode();
@@ -52,7 +52,7 @@ final readonly class PacaResponse
         $this->supplier = $p->getSupplier() ? ['id' => $p->getSupplier()->getId(), 'name' => $p->getSupplier()->getName()] : null;
         $this->purchasePrice = $p->getPurchasePrice();
         $this->sellingPrice = $p->getSellingPrice();
-        $this->stock = $p->getCachedStock();
+        $this->stock = $stock ?? $p->getCachedStock();
         $this->availableStock = $availableStock;
         $this->stockByWarehouse = $stockByWarehouse;
         $this->pieceCount = $p->getPieceCount();

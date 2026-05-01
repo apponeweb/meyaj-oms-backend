@@ -74,8 +74,11 @@ final class InventoryCountController extends AbstractController
         $payload = json_decode($request->getContent(), true, 512, \JSON_THROW_ON_ERROR);
         $countedQty = isset($payload['countedQty']) ? (int) $payload['countedQty'] : null;
         $notes = $payload['notes'] ?? null;
+        $scannedSerials = isset($payload['scannedSerials']) && is_array($payload['scannedSerials'])
+            ? $payload['scannedSerials']
+            : null;
 
-        return $this->json($this->countService->updateDetail($id, $detailId, $countedQty, $notes));
+        return $this->json($this->countService->updateDetail($id, $detailId, $countedQty, $notes, $scannedSerials));
     }
 
     #[Route('/{id}/finalize', methods: ['POST'], requirements: ['id' => '\d+'])]

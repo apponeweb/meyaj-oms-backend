@@ -105,6 +105,22 @@ class PacaUnitRepository extends ServiceEntityRepository
             ->getSingleScalarResult();
     }
 
+    public function countTrackedByPaca(int $pacaId): int
+    {
+        return (int) $this->createQueryBuilder('pu')
+            ->select('COUNT(pu.id)')
+            ->where('pu.paca = :pacaId')
+            ->andWhere('pu.status IN (:statuses)')
+            ->setParameter('pacaId', $pacaId)
+            ->setParameter('statuses', [
+                PacaUnit::STATUS_AVAILABLE,
+                PacaUnit::STATUS_RESERVED,
+                PacaUnit::STATUS_PICKED,
+            ])
+            ->getQuery()
+            ->getSingleScalarResult();
+    }
+
     /**
      * @param int[] $pacaIds
      * @return array<int, int> Map of pacaId => availableCount
@@ -121,6 +137,122 @@ class PacaUnitRepository extends ServiceEntityRepository
             ->andWhere('pu.status = :status')
             ->setParameter('ids', $pacaIds)
             ->setParameter('status', PacaUnit::STATUS_AVAILABLE)
+            ->groupBy('pu.paca')
+            ->getQuery()
+            ->getArrayResult();
+
+        $map = [];
+        foreach ($rows as $row) {
+            $map[(int) $row['pacaId']] = (int) $row['cnt'];
+        }
+
+        return $map;
+    }
+
+    /**
+     * @param int[] $pacaIds
+     * @return array<int, int> Map of pacaId => trackedCount across all warehouses
+     */
+    public function countTrackedByPacaIds(array $pacaIds): array
+    {
+        if (empty($pacaIds)) {
+            return [];
+        }
+
+        $rows = $this->createQueryBuilder('pu')
+            ->select('IDENTITY(pu.paca) AS pacaId, COUNT(pu.id) AS cnt')
+            ->where('pu.paca IN (:ids)')
+            ->andWhere('pu.status IN (:statuses)')
+            ->setParameter('ids', $pacaIds)
+            ->setParameter('statuses', [
+                PacaUnit::STATUS_AVAILABLE,
+                PacaUnit::STATUS_RESERVED,
+                PacaUnit::STATUS_PICKED,
+            ])
+            ->groupBy('pu.paca')
+            ->getQuery()
+            ->getArrayResult();
+
+        $map = [];
+        foreach ($rows as $row) {
+            $map[(int) $row['pacaId']] = (int) $row['cnt'];
+        }
+
+        return $map;
+    }
+
+    /**
+     * @param int[] $pacaIds
+     * @return array<int, int> Map of pacaId => availableCount respecting optional warehouse filters
+     */
+    public function countAvailableByPacaIdsFiltered(array $pacaIds, ?int $warehouseId = null, ?int $warehouseBinId = null): array
+    {
+        if (empty($pacaIds)) {
+            return [];
+        }
+
+        $qb = $this->createQueryBuilder('pu')
+            ->select('IDENTITY(pu.paca) AS pacaId, COUNT(pu.id) AS cnt')
+            ->where('pu.paca IN (:ids)')
+            ->andWhere('pu.status = :status')
+            ->setParameter('ids', $pacaIds)
+            ->setParameter('status', PacaUnit::STATUS_AVAILABLE);
+
+        if ($warehouseId !== null) {
+            $qb->andWhere('IDENTITY(pu.warehouse) = :warehouseId')
+                ->setParameter('warehouseId', $warehouseId);
+        }
+
+        if ($warehouseBinId !== null) {
+            $qb->andWhere('IDENTITY(pu.warehouseBin) = :warehouseBinId')
+                ->setParameter('warehouseBinId', $warehouseBinId);
+        }
+
+        $rows = $qb
+            ->groupBy('pu.paca')
+            ->getQuery()
+            ->getArrayResult();
+
+        $map = [];
+        foreach ($rows as $row) {
+            $map[(int) $row['pacaId']] = (int) $row['cnt'];
+        }
+
+        return $map;
+    }
+
+    /**
+     * @param int[] $pacaIds
+     * @return array<int, int> Map of pacaId => trackedCount respecting optional warehouse filters
+     */
+    public function countTrackedByPacaIdsFiltered(array $pacaIds, ?int $warehouseId = null, ?int $warehouseBinId = null): array
+    {
+        if (empty($pacaIds)) {
+            return [];
+        }
+
+        $qb = $this->createQueryBuilder('pu')
+            ->select('IDENTITY(pu.paca) AS pacaId, COUNT(pu.id) AS cnt')
+            ->where('pu.paca IN (:ids)')
+            ->andWhere('pu.status IN (:statuses)')
+            ->setParameter('ids', $pacaIds)
+            ->setParameter('statuses', [
+                PacaUnit::STATUS_AVAILABLE,
+                PacaUnit::STATUS_RESERVED,
+                PacaUnit::STATUS_PICKED,
+            ]);
+
+        if ($warehouseId !== null) {
+            $qb->andWhere('IDENTITY(pu.warehouse) = :warehouseId')
+                ->setParameter('warehouseId', $warehouseId);
+        }
+
+        if ($warehouseBinId !== null) {
+            $qb->andWhere('IDENTITY(pu.warehouseBin) = :warehouseBinId')
+                ->setParameter('warehouseBinId', $warehouseBinId);
+        }
+
+        $rows = $qb
             ->groupBy('pu.paca')
             ->getQuery()
             ->getArrayResult();

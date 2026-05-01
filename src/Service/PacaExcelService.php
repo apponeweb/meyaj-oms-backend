@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Service;
 
+use App\Entity\InventoryMovement;
+use App\Entity\InventoryReason;
 use App\Entity\Paca;
 use App\Entity\PacaImportLog;
 use App\Entity\PacaUnit;
@@ -37,6 +39,7 @@ final readonly class PacaExcelService
         private PacaRepository $pacaRepository,
         private PacaImportLogRepository $importLogRepository,
         private WarehouseRepository $warehouseRepository,
+        private InventoryManager $inventoryManager,
         private string $importDir,
     ) {}
 
@@ -184,6 +187,8 @@ final readonly class PacaExcelService
             $updated = 0;
             $errors = [];
             $processed = 0;
+            $adjustmentInReason = $this->requireInventoryReason(InventoryReason::CODE_ADJ_IN);
+            $adjustmentOutReason = $this->requireInventoryReason(InventoryReason::CODE_ADJ_OUT);
 
             foreach ($rows as $rowNum => $row) {
                 try {
@@ -232,6 +237,8 @@ final readonly class PacaExcelService
                     $existingPaca = $this->pacaRepository->findOneBy(['code' => $code]);
                     $isNew = $existingPaca === null;
                     $paca = $existingPaca ?? new Paca();
+                    $previousTotalStock = $isNew ? 0 : $this->countTrackedUnits($paca);
+                    $previousWarehouseStock = $isNew ? 0 : $this->countTrackedUnitsInWarehouse($paca, $warehouse);
 
                     $paca->setCode($code);
                     $paca->setName($name);
@@ -245,7 +252,55 @@ final readonly class PacaExcelService
                         $updated++;
                     }
 
-                    $this->syncUnitsForImport($paca, $warehouse, $isNew, $replaceUnits);
+                    $stockDelta = $this->syncUnitsForImport($paca, $warehouse, $isNew, $replaceUnits);
+                    $this->em->flush();
+                    $this->inventoryManager->updateCachedStock($paca);
+                    $currentTotalStock = $paca->getCachedStock();
+                    $currentWarehouseStock = $this->countTrackedUnitsInWarehouse($paca, $warehouse);
+
+                    if ($stockDelta > 0) {
+                        $this->recordImportMovement(
+                            paca: $paca,
+                            warehouse: $warehouse,
+                            reason: $adjustmentInReason,
+                            user: $log->getUser(),
+                            quantity: $stockDelta,
+                            balanceAfter: $currentWarehouseStock,
+                            importFilename: $log->getOriginalFilename(),
+                        );
+                    } elseif ($stockDelta < 0) {
+                        $this->recordImportMovement(
+                            paca: $paca,
+                            warehouse: $warehouse,
+                            reason: $adjustmentOutReason,
+                            user: $log->getUser(),
+                            quantity: abs($stockDelta),
+                            balanceAfter: $currentWarehouseStock,
+                            importFilename: $log->getOriginalFilename(),
+                        );
+                    } elseif ($isNew && $currentTotalStock > 0) {
+                        $fallbackReason = $adjustmentInReason;
+                        $this->recordImportMovement(
+                            paca: $paca,
+                            warehouse: $warehouse,
+                            reason: $fallbackReason,
+                            user: $log->getUser(),
+                            quantity: $currentTotalStock,
+                            balanceAfter: $currentWarehouseStock,
+                            importFilename: $log->getOriginalFilename(),
+                        );
+                    }
+
+                    if (!$isNew && $previousWarehouseStock !== $currentWarehouseStock && $stockDelta === 0) {
+                        $notes = sprintf(
+                            'Carga masiva desde archivo %s. El saldo de la bodega %s se recalculó de %d a %d unidades.',
+                            $log->getOriginalFilename(),
+                            $warehouse->getName(),
+                            $previousWarehouseStock,
+                            $currentWarehouseStock,
+                        );
+                        $log->addError("Fila {$rowNum} (código '{$code}'): {$notes}");
+                    }
                 } catch (\Throwable $e) {
                     $errors[] = "Fila {$rowNum}" . (isset($code) && $code !== '' ? " (código '{$code}')" : '') . ': ' . $this->normalizeImportErrorMessage($e);
 
@@ -284,41 +339,45 @@ final readonly class PacaExcelService
         return $this->formatLogResponse($log);
     }
 
-    private function syncUnitsForImport(Paca $paca, Warehouse $warehouse, bool $isNew, bool $replaceUnits = false): void
+    private function syncUnitsForImport(Paca $paca, Warehouse $warehouse, bool $isNew, bool $replaceUnits = false): int
     {
-        $stock = $paca->getCachedStock();
+        $targetStock = $paca->getCachedStock();
+        $currentAvailableUnits = $this->countAvailableUnitsInWarehouse($paca, $warehouse);
+        $delta = $targetStock - $currentAvailableUnits;
 
         if ($isNew) {
-            if ($stock <= 0) {
-                return;
+            if ($targetStock <= 0) {
+                return 0;
             }
-            $this->createUnitsForImport($paca, $warehouse, $stock, 0);
-            return;
+            $this->createUnitsForImport($paca, $warehouse, $targetStock, 0);
+            return $targetStock;
         }
 
         if ($replaceUnits) {
             $this->em->createQuery(
-                "DELETE FROM App\Entity\PacaUnit u WHERE u.paca = :paca AND u.status = 'AVAILABLE'"
-            )->setParameter('paca', $paca)->execute();
+                "DELETE FROM App\Entity\PacaUnit u WHERE u.paca = :paca AND u.warehouse = :warehouse AND u.status = 'AVAILABLE'"
+            )
+                ->setParameter('paca', $paca)
+                ->setParameter('warehouse', $warehouse)
+                ->execute();
 
-            if ($stock > 0) {
-                $this->createUnitsForImport($paca, $warehouse, $stock, $this->getHighestSerialOffset($paca));
+            if ($targetStock > 0) {
+                $this->createUnitsForImport($paca, $warehouse, $targetStock, $this->getHighestSerialOffset($paca));
             }
-            return;
+            return $targetStock - $currentAvailableUnits;
         }
 
-        if ($stock <= 0) {
-            return;
-        }
-
-        $availableUnits = (int) $this->em->createQuery(
-            "SELECT COUNT(u.id) FROM App\Entity\PacaUnit u WHERE u.paca = :paca AND u.status = 'AVAILABLE'"
-        )->setParameter('paca', $paca)->getSingleScalarResult();
-
-        $delta = $stock - $availableUnits;
         if ($delta > 0) {
             $this->createUnitsForImport($paca, $warehouse, $delta, $this->getHighestSerialOffset($paca));
+            return $delta;
         }
+
+        if ($delta < 0) {
+            $this->removeAvailableUnitsForImport($paca, $warehouse, abs($delta));
+            return $delta;
+        }
+
+        return 0;
     }
 
     private function createUnitsForImport(Paca $paca, Warehouse $warehouse, int $quantity, int $serialOffset): void
@@ -331,6 +390,109 @@ final readonly class PacaExcelService
             $unit->setStatus(PacaUnit::STATUS_AVAILABLE);
             $this->em->persist($unit);
         }
+    }
+
+    private function removeAvailableUnitsForImport(Paca $paca, Warehouse $warehouse, int $quantity): void
+    {
+        if ($quantity <= 0) {
+            return;
+        }
+
+        $units = $this->em->createQueryBuilder()
+            ->select('u')
+            ->from(PacaUnit::class, 'u')
+            ->where('u.paca = :paca')
+            ->andWhere('u.warehouse = :warehouse')
+            ->andWhere('u.status = :status')
+            ->orderBy('u.id', 'DESC')
+            ->setParameter('paca', $paca)
+            ->setParameter('warehouse', $warehouse)
+            ->setParameter('status', PacaUnit::STATUS_AVAILABLE)
+            ->setMaxResults($quantity)
+            ->getQuery()
+            ->getResult();
+
+        foreach ($units as $unit) {
+            $this->em->remove($unit);
+        }
+    }
+
+    private function countAvailableUnitsInWarehouse(Paca $paca, Warehouse $warehouse): int
+    {
+        return (int) $this->em->createQuery(
+            "SELECT COUNT(u.id) FROM App\Entity\PacaUnit u WHERE u.paca = :paca AND u.warehouse = :warehouse AND u.status = 'AVAILABLE'"
+        )
+            ->setParameter('paca', $paca)
+            ->setParameter('warehouse', $warehouse)
+            ->getSingleScalarResult();
+    }
+
+    private function countTrackedUnits(Paca $paca): int
+    {
+        return (int) $this->em->createQueryBuilder()
+            ->select('COUNT(u.id)')
+            ->from(PacaUnit::class, 'u')
+            ->where('u.paca = :paca')
+            ->andWhere('u.status IN (:statuses)')
+            ->setParameter('paca', $paca)
+            ->setParameter('statuses', [
+                PacaUnit::STATUS_AVAILABLE,
+                PacaUnit::STATUS_RESERVED,
+                PacaUnit::STATUS_PICKED,
+            ])
+            ->getQuery()
+            ->getSingleScalarResult();
+    }
+
+    private function countTrackedUnitsInWarehouse(Paca $paca, Warehouse $warehouse): int
+    {
+        return (int) $this->em->createQueryBuilder()
+            ->select('COUNT(u.id)')
+            ->from(PacaUnit::class, 'u')
+            ->where('u.paca = :paca')
+            ->andWhere('u.warehouse = :warehouse')
+            ->andWhere('u.status IN (:statuses)')
+            ->setParameter('paca', $paca)
+            ->setParameter('warehouse', $warehouse)
+            ->setParameter('statuses', [
+                PacaUnit::STATUS_AVAILABLE,
+                PacaUnit::STATUS_RESERVED,
+                PacaUnit::STATUS_PICKED,
+            ])
+            ->getQuery()
+            ->getSingleScalarResult();
+    }
+
+    private function recordImportMovement(
+        Paca $paca,
+        Warehouse $warehouse,
+        ?InventoryReason $reason,
+        User $user,
+        int $quantity,
+        int $balanceAfter,
+        string $importFilename,
+    ): void {
+        if ($reason === null || $quantity <= 0) {
+            return;
+        }
+
+        $movement = new InventoryMovement();
+        $movement->setCompany($warehouse->getCompany());
+        $movement->setPaca($paca);
+        $movement->setWarehouse($warehouse);
+        $movement->setWarehouseBin(null);
+        $movement->setReason($reason);
+        $movement->setUser($user);
+        $movement->setMovementType($reason->getDirection());
+        $movement->setReferenceType('paca_import');
+        $movement->setReferenceId($paca->getId());
+        $movement->setQtyIn($reason->getDirection() === 'IN' ? $quantity : 0);
+        $movement->setQtyOut($reason->getDirection() === 'OUT' ? $quantity : 0);
+        $movement->setBalanceAfter($balanceAfter);
+        $movement->setUnitCost($paca->getPurchasePrice());
+        $movement->setNotes(sprintf('Carga masiva desde archivo %s. Stock objetivo aplicado a la bodega seleccionada; el saldo mostrado corresponde a esa bodega.', $importFilename));
+
+        $this->em->persist($movement);
     }
 
     private function getHighestSerialOffset(Paca $paca): int
