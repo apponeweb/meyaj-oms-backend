@@ -107,6 +107,78 @@ Cada vez que se agreguen variables de entorno, cambien permisos o se creen carpe
 php bin/console cache:clear
 ```
 
+### Timeout de ejecución para importaciones largas
+
+Si una carga de productos tarda más de 30 segundos, PHP puede responder con un error como:
+
+```json
+{
+  "code": 500,
+  "message": "Error interno del servidor.",
+  "details": "Error: Maximum execution time of 30 seconds exceeded"
+}
+```
+
+En el servidor de producción el parámetro principal se ajusta en:
+
+```text
+/etc/php.ini
+```
+
+Parámetro a revisar:
+
+```ini
+max_execution_time = 300
+```
+
+En este proyecto se actualizó en producción de `30` a `300` segundos para permitir importaciones más grandes.
+
+Después de cambiarlo, reiniciar:
+
+```bash
+sudo systemctl restart php-fpm
+sudo systemctl restart nginx
+```
+
+Si el servidor usa un pool o configuración adicional de PHP-FPM, también validar que no exista un límite más estricto en:
+
+```text
+/etc/php-fpm.d/www.conf
+```
+
+Parámetros a revisar allí:
+
+```ini
+request_terminate_timeout = 0
+request_slowlog_timeout = 0
+```
+
+Si Nginx tuviera timeouts personalizados, validar también:
+
+```text
+fastcgi_read_timeout
+proxy_read_timeout
+```
+
+### Implicaciones operativas y de costo
+
+- **Mayor uso de CPU por request**
+  - una importación larga mantiene un worker de PHP ocupado durante más tiempo
+
+- **Menor concurrencia**
+  - mientras una importación sigue corriendo, ese worker no atiende otras peticiones
+
+- **Posible necesidad de más recursos**
+  - si varios usuarios importan archivos pesados al mismo tiempo, puede ser necesario subir CPU/RAM o aumentar capacidad de la instancia
+
+- **No aumenta el costo por sí solo**
+  - cambiar `max_execution_time` no genera un cobro directo
+  - el costo solo sube si la carga obliga a usar una instancia más grande, más workers o más infraestructura
+
+- **Recomendación**
+  - usar un valor moderado como `300` segundos para cargas grandes controladas
+  - si las importaciones siguen creciendo, conviene moverlas a procesamiento en background en vez de seguir aumentando este timeout
+
 ## Variable de operación para inicialización y producción
 
 Se agregó la variable de entorno:
