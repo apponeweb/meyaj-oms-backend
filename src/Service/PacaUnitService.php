@@ -27,6 +27,7 @@ final readonly class PacaUnitService
         private PacaUnitRepository $pacaUnitRepo,
         private Paginator $paginator,
         private InventoryManager $inventoryManager,
+        private string $zebraPrinterName,
     ) {}
 
     /**
@@ -215,6 +216,60 @@ final readonly class PacaUnitService
         $u = $this->pacaUnitRepo->findBySerial($serial);
         if ($u === null) throw new NotFoundHttpException(\sprintf('Unidad de paca con serial "%s" no encontrada.', $serial));
         return new PacaUnitResponse($u);
+    }
+
+    /**
+     * @param int[] $unitIds
+     * @return array<string, mixed>
+     */
+    public function buildZebraPrintPayload(array $unitIds): array
+    {
+        $normalizedIds = array_values(array_unique(array_filter(array_map('intval', $unitIds), static fn (int $id): bool => $id > 0)));
+        if ($normalizedIds === []) {
+            throw new BadRequestHttpException('Debe proporcionar al menos un ID válido en unitIds.');
+        }
+
+        $units = $this->pacaUnitRepo->createQueryBuilder('u')
+            ->leftJoin('u.paca', 'p')->addSelect('p')
+            ->leftJoin('u.warehouse', 'w')->addSelect('w')
+            ->leftJoin('u.warehouseBin', 'wb')->addSelect('wb')
+            ->where('u.id IN (:ids)')
+            ->setParameter('ids', $normalizedIds)
+            ->getQuery()
+            ->getResult();
+
+        if ($units === []) {
+            throw new NotFoundHttpException('No se encontraron unidades para generar el payload de impresión.');
+        }
+
+        $unitsById = [];
+        foreach ($units as $unit) {
+            if ($unit instanceof PacaUnit && $unit->getId() !== null) {
+                $unitsById[$unit->getId()] = $unit;
+            }
+        }
+
+        $missingIds = array_values(array_diff($normalizedIds, array_keys($unitsById)));
+        if ($missingIds !== []) {
+            throw new NotFoundHttpException(sprintf('No se encontraron las unidades con IDs: %s.', implode(', ', $missingIds)));
+        }
+
+        $items = [];
+        foreach ($normalizedIds as $unitId) {
+            $items[] = $this->buildZebraLabelItem($unitsById[$unitId]);
+        }
+
+        if (count($items) === 1) {
+            return [
+                'printerName' => $this->zebraPrinterName,
+                'data' => $items[0],
+            ];
+        }
+
+        return [
+            'printerName' => $this->zebraPrinterName,
+            'items' => $items,
+        ];
     }
 
     /**
@@ -469,6 +524,39 @@ final readonly class PacaUnitService
     private function resolveSystemUser(): ?User
     {
         return $this->em->getRepository(User::class)->findOneBy([], ['id' => 'ASC']);
+    }
+
+    /**
+     * @return array{codigo: string, descripcion: string, bodega: string, ubicacion: string, fecha: string}
+     */
+    private function buildZebraLabelItem(PacaUnit $unit): array
+    {
+        $paca = $unit->getPaca();
+        $warehouse = $unit->getWarehouse();
+        $warehouseBin = $unit->getWarehouseBin();
+
+        $codigo = trim($unit->getSerial());
+        if ($codigo === '') {
+            throw new BadRequestHttpException(sprintf('La unidad %d no tiene serial asignado.', $unit->getId()));
+        }
+
+        $descripcion = trim($paca->getName());
+        if ($descripcion === '') {
+            throw new BadRequestHttpException(sprintf('La unidad %s no tiene descripción de paca disponible.', $codigo));
+        }
+
+        $bodega = trim($warehouse->getName());
+        if ($bodega === '') {
+            throw new BadRequestHttpException(sprintf('La unidad %s no tiene bodega asignada.', $codigo));
+        }
+
+        return [
+            'codigo' => $codigo,
+            'descripcion' => $descripcion,
+            'bodega' => $bodega,
+            'ubicacion' => trim($warehouseBin?->getName() ?? ''),
+            'fecha' => $unit->getCreatedAt()->format('d/m/Y'),
+        ];
     }
 
     private function recordTransferMovement(

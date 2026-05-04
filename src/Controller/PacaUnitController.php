@@ -101,6 +101,20 @@ final class PacaUnitController extends AbstractController
         ]);
     }
 
+    #[Route('/labels/zebra-payload', methods: ['POST'])]
+    #[OA\Post(summary: 'Generar payload listo para impresión Zebra de una o varias unidades')]
+    public function zebraPayload(Request $request): JsonResponse
+    {
+        $data = json_decode($request->getContent(), true, 512, \JSON_THROW_ON_ERROR);
+        $unitIds = $data['unitIds'] ?? [];
+
+        if (!is_array($unitIds) || $unitIds === []) {
+            return $this->json(['error' => 'Se requiere array de IDs en "unitIds".'], Response::HTTP_BAD_REQUEST);
+        }
+
+        return $this->json($this->pacaUnitService->buildZebraPrintPayload($unitIds));
+    }
+
     #[Route('/delete', methods: ['POST'])]
     #[OA\Post(summary: 'Eliminar unidades en lote (solo AVAILABLE)')]
     public function deleteBulk(Request $request): JsonResponse
