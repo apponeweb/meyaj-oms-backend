@@ -14,11 +14,13 @@ use App\Entity\QualityGrade;
 use App\Entity\SeasonCatalog;
 use App\Entity\SizeProfile;
 use App\Pagination\PaginationRequest;
+use App\Service\LabelCatalogImportService;
 use App\Service\ProductCatalogService;
 use Nelmio\ApiDocBundle\Attribute\Model;
 use OpenApi\Attributes as OA;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
+use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpKernel\Attribute\MapQueryString;
 use Symfony\Component\HttpKernel\Attribute\MapRequestPayload;
@@ -40,6 +42,7 @@ final class ProductCatalogController extends AbstractController
 
     public function __construct(
         private readonly ProductCatalogService $service,
+        private readonly LabelCatalogImportService $labelCatalogImportService,
     ) {
     }
 
@@ -71,6 +74,21 @@ final class ProductCatalogController extends AbstractController
     ): JsonResponse {
         return $this->json(
             $this->service->create(self::CATALOG_MAP[$type], $request->name, $request->acronym, $request->description),
+            Response::HTTP_CREATED,
+        );
+    }
+
+    #[Route('/labels/import', methods: ['POST'])]
+    #[OA\Post(summary: 'Importar catálogo de etiquetas desde Excel o CSV')]
+    public function importLabels(Request $request): JsonResponse
+    {
+        $file = $request->files->get('file');
+        if ($file === null) {
+            return $this->json(['error' => 'No se proporcionó archivo'], Response::HTTP_BAD_REQUEST);
+        }
+
+        return $this->json(
+            $this->labelCatalogImportService->importFromFile($file),
             Response::HTTP_CREATED,
         );
     }

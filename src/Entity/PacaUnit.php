@@ -21,10 +21,16 @@ class PacaUnit
     public const STATUS_AVAILABLE = 'AVAILABLE';
     public const STATUS_RESERVED = 'RESERVED';
     public const STATUS_PICKED = 'PICKED';
+    public const STATUS_PICKING = 'PICKING';
     public const STATUS_DISPATCHED = 'DISPATCHED';
+    public const STATUS_SHIPPED = 'SHIPPED';
     public const STATUS_SOLD = 'SOLD';
+    public const STATUS_DELIVERED = 'DELIVERED';
     public const STATUS_RETURNED = 'RETURNED';
     public const STATUS_DAMAGED = 'DAMAGED';
+    public const STATUS_ADJUSTED_LOSS = 'ADJUSTED_LOSS';
+    public const STATUS_CANCELLED = 'CANCELLED';
+    public const STATUS_IN_TRANSIT = 'IN_TRANSIT';
 
     #[ORM\Id] #[ORM\GeneratedValue] #[ORM\Column]
     private ?int $id = null;

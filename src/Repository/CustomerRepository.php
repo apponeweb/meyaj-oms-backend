@@ -23,15 +23,21 @@ class CustomerRepository extends ServiceEntityRepository
      */
     public function findByNameOrPhone(string $query): array
     {
-        return $this->createQueryBuilder('c')
-            ->where('c.name LIKE :query')
-            ->orWhere('c.phone LIKE :query')
-            ->orWhere('c.email LIKE :query')
+        $qb = $this->createQueryBuilder('c');
+
+        return $qb
+            ->where(
+                $qb->expr()->orX(
+                    'c.name LIKE :query',
+                    'c.phone LIKE :query',
+                    'c.email LIKE :query',
+                ),
+            )
             ->andWhere('c.active = :active')
             ->setParameter('query', '%' . $query . '%')
             ->setParameter('active', true)
             ->orderBy('c.name', 'ASC')
-            ->setMaxResults(10)
+            ->setMaxResults(25)
             ->getQuery()
             ->getResult()
         ;

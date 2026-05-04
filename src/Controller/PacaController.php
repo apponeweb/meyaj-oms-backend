@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Controller;
 
+use App\DTO\Request\BulkUpdatePacaRequest;
 use App\DTO\Request\CreatePacaRequest;
 use App\DTO\Request\UpdatePacaRequest;
 use App\Entity\User;
@@ -73,6 +74,13 @@ final class PacaController extends AbstractController
     #[OA\Put(summary: 'Actualizar paca', requestBody: new OA\RequestBody(content: new OA\JsonContent(ref: new Model(type: UpdatePacaRequest::class))))]
     public function update(int $id, #[MapRequestPayload] UpdatePacaRequest $r): JsonResponse
     { return $this->json($this->service->update($id, $r)); }
+
+    #[Route('/bulk-update', methods: ['PATCH'])]
+    #[OA\Patch(summary: 'Actualizar precios y clasificación de pacas masivamente', requestBody: new OA\RequestBody(content: new OA\JsonContent(ref: new Model(type: BulkUpdatePacaRequest::class))))]
+    public function bulkUpdate(#[MapRequestPayload] BulkUpdatePacaRequest $r): JsonResponse
+    {
+        return $this->json($this->service->bulkUpdate($r, $this->getUser()));
+    }
 
     #[Route('/{id}', methods: ['DELETE'], requirements: ['id' => '\d+'])]
     #[OA\Delete(summary: 'Eliminar paca')]

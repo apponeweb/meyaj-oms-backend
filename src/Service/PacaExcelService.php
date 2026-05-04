@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Service;
 
+use App\Entity\InventoryMovement;
+use App\Entity\InventoryReason;
 use App\Entity\Paca;
 use App\Entity\PacaImportLog;
 use App\Entity\PacaUnit;
@@ -37,6 +39,7 @@ final readonly class PacaExcelService
         private PacaRepository $pacaRepository,
         private PacaImportLogRepository $importLogRepository,
         private WarehouseRepository $warehouseRepository,
+        private InventoryManager $inventoryManager,
         private string $importDir,
     ) {}
 
@@ -151,24 +154,9 @@ final readonly class PacaExcelService
             throw new NotFoundHttpException('Archivo de importación no encontrado.');
         }
 
-        // Mark as processing using direct SQL so it commits immediately without opening
-        // a long-lived Doctrine transaction that would block concurrent /status polls.
-        $conn = $this->em->getConnection();
-        $conn->executeStatement(
-            "UPDATE paca_import_log SET status = 'processing' WHERE id = :id",
-            ['id' => $log->getId()],
-        );
-        // Detach the log entity so Doctrine never touches it again; all progress
-        // updates go through flushProgress() which uses direct SQL.
-        $this->em->detach($log);
-
-        $created = 0;
-        $updated = 0;
-        $errors = [];
-        $processed = 0;
-
-        // Keep warehouse as a plain reference; re-fetch if EM gets cleared mid-loop.
-        $warehouseId2 = $warehouse->getId();
+        $log->setStatus(PacaImportLog::STATUS_PROCESSING);
+        $this->em->flush();
+        $logId = $log->getId();
 
         try {
             $spreadsheet = IOFactory::load($filePath);
@@ -176,7 +164,7 @@ final readonly class PacaExcelService
             $rows = $sheet->toArray(null, true, true, true);
 
             if (\count($rows) < 2) {
-                throw new \RuntimeException('El archivo no contiene datos.');
+                throw new \RuntimeException('El archivo no contiene filas de productos para procesar.');
             }
 
             $headerRow = $rows[1] ?? [];
@@ -189,52 +177,73 @@ final readonly class PacaExcelService
 
             $catalogMap = $this->buildCatalogLookups();
 
+            // Build existing names set for uniqueness validation
             $existingNames = [];
             foreach ($this->pacaRepository->findAll() as $existing) {
                 $existingNames[mb_strtolower($existing->getName())] = $existing->getCode();
             }
             $namesInFile = [];
 
+            $created = 0;
+            $updated = 0;
+            $errors = [];
+            $processed = 0;
+            $adjustmentInReason = $this->requireInventoryReason(InventoryReason::CODE_ADJ_IN);
+            $adjustmentOutReason = $this->requireInventoryReason(InventoryReason::CODE_ADJ_OUT);
+
             foreach ($rows as $rowNum => $row) {
-                $code = trim((string) ($row[$colMap['código'] ?? $colMap['codigo'] ?? ''] ?? ''));
-                if ($code === '') {
-                    $processed++;
-                    $this->flushProgress($log->getId(), $processed, $created, $updated, $errors);
-                    continue;
-                }
-
-                $name = trim((string) ($row[$colMap['nombre'] ?? ''] ?? ''));
-                if ($name === '') {
-                    $errors[] = "Fila {$rowNum}: El nombre es obligatorio para el código '{$code}'.";
-                    $processed++;
-                    $this->flushProgress($log->getId(), $processed, $created, $updated, $errors);
-                    continue;
-                }
-
-                $nameLower = mb_strtolower($name);
-                if (isset($namesInFile[$nameLower]) && $namesInFile[$nameLower] !== $code) {
-                    $errors[] = "Fila {$rowNum}: El nombre '{$name}' está duplicado en el archivo (ya en código '{$namesInFile[$nameLower]}').";
-                    $processed++;
-                    $this->flushProgress($log->getId(), $processed, $created, $updated, $errors);
-                    continue;
-                }
-
-                if (isset($existingNames[$nameLower]) && $existingNames[$nameLower] !== $code) {
-                    $errors[] = "Fila {$rowNum}: El nombre '{$name}' ya existe en la BD (código '{$existingNames[$nameLower]}').";
-                    $processed++;
-                    $this->flushProgress($log->getId(), $processed, $created, $updated, $errors);
-                    continue;
-                }
-
-                $namesInFile[$nameLower] = $code;
-
+                $connection = $this->em->getConnection();
                 try {
-                    // Re-fetch warehouse after any EM clear so it stays managed.
-                    $warehouse = $this->warehouseRepository->find($warehouseId2);
+                    $code = trim((string) ($row[$colMap['código'] ?? $colMap['codigo'] ?? ''] ?? ''));
+                    if ($code === '') {
+                        $processed++;
+                        $log->setProcessedRows($processed);
+                        $this->em->flush();
+                        continue;
+                    }
+
+                    $name = trim((string) ($row[$colMap['nombre'] ?? ''] ?? ''));
+                    if ($name === '') {
+                        $errors[] = "Fila {$rowNum}: El nombre es obligatorio para el código '{$code}'.";
+                        $processed++;
+                        $log->setProcessedRows($processed);
+                        $log->setErrors($errors);
+                        $log->setErrorCount(\count($errors));
+                        $this->em->flush();
+                        continue;
+                    }
+
+                    $nameLower = mb_strtolower($name);
+                    if (isset($namesInFile[$nameLower]) && $namesInFile[$nameLower] !== $code) {
+                        $errors[] = "Fila {$rowNum}: El nombre '{$name}' está duplicado en el archivo (ya en código '{$namesInFile[$nameLower]}').";
+                        $processed++;
+                        $log->setProcessedRows($processed);
+                        $log->setErrors($errors);
+                        $log->setErrorCount(\count($errors));
+                        $this->em->flush();
+                        continue;
+                    }
+
+                    if (isset($existingNames[$nameLower]) && $existingNames[$nameLower] !== $code) {
+                        $errors[] = "Fila {$rowNum}: El nombre '{$name}' ya existe en la BD (código '{$existingNames[$nameLower]}').";
+                        $processed++;
+                        $log->setProcessedRows($processed);
+                        $log->setErrors($errors);
+                        $log->setErrorCount(\count($errors));
+                        $this->em->flush();
+                        continue;
+                    }
+
+                    $createdDelta = 0;
+                    $updatedDelta = 0;
+
+                    $connection->beginTransaction();
 
                     $existingPaca = $this->pacaRepository->findOneBy(['code' => $code]);
                     $isNew = $existingPaca === null;
                     $paca = $existingPaca ?? new Paca();
+                    $previousTotalStock = $isNew ? 0 : $this->countTrackedUnits($paca);
+                    $previousWarehouseStock = $isNew ? 0 : $this->countTrackedUnitsInWarehouse($paca, $warehouse);
 
                     $paca->setCode($code);
                     $paca->setName($name);
@@ -242,33 +251,115 @@ final readonly class PacaExcelService
 
                     if ($isNew) {
                         $this->em->persist($paca);
-                    }
-
-                    $this->syncUnitsForImport($paca, $warehouse, $isNew, $replaceUnits);
-
-                    // flush commits this row; Doctrine manages its own transaction here.
-                    $this->em->flush();
-
-                    // Only count after a successful flush.
-                    if ($isNew) {
-                        $created++;
-                        $existingNames[$nameLower] = $code;
+                        $this->em->flush();
+                        $createdDelta = 1;
                     } else {
-                        $updated++;
+                        $updatedDelta = 1;
                     }
+
+                    $stockDelta = $this->syncUnitsForImport($paca, $warehouse, $isNew, $replaceUnits);
+                    $this->em->flush();
+                    $this->inventoryManager->updateCachedStock($paca);
+                    $currentTotalStock = $paca->getCachedStock();
+                    $currentWarehouseStock = $this->countTrackedUnitsInWarehouse($paca, $warehouse);
+
+                    if ($stockDelta > 0) {
+                        $this->recordImportMovement(
+                            paca: $paca,
+                            warehouse: $warehouse,
+                            reason: $adjustmentInReason,
+                            user: $log->getUser(),
+                            quantity: $stockDelta,
+                            balanceAfter: $currentWarehouseStock,
+                            importFilename: $log->getOriginalFilename(),
+                        );
+                    } elseif ($stockDelta < 0) {
+                        $this->recordImportMovement(
+                            paca: $paca,
+                            warehouse: $warehouse,
+                            reason: $adjustmentOutReason,
+                            user: $log->getUser(),
+                            quantity: abs($stockDelta),
+                            balanceAfter: $currentWarehouseStock,
+                            importFilename: $log->getOriginalFilename(),
+                        );
+                    } elseif ($isNew && $currentTotalStock > 0) {
+                        $fallbackReason = $adjustmentInReason;
+                        $this->recordImportMovement(
+                            paca: $paca,
+                            warehouse: $warehouse,
+                            reason: $fallbackReason,
+                            user: $log->getUser(),
+                            quantity: $currentTotalStock,
+                            balanceAfter: $currentWarehouseStock,
+                            importFilename: $log->getOriginalFilename(),
+                        );
+                    }
+
+                    if (!$isNew && $previousWarehouseStock !== $currentWarehouseStock && $stockDelta === 0) {
+                        $notes = sprintf(
+                            'Carga masiva desde archivo %s. El saldo de la bodega %s se recalculó de %d a %d unidades.',
+                            $log->getOriginalFilename(),
+                            $warehouse->getName(),
+                            $previousWarehouseStock,
+                            $currentWarehouseStock,
+                        );
+                        $log->addError("Fila {$rowNum} (código '{$code}'): {$notes}");
+                    }
+
+                    $connection->commit();
+                    $namesInFile[$nameLower] = $code;
+                    if ($isNew) {
+                        $existingNames[$nameLower] = $code;
+                    }
+                    $created += $createdDelta;
+                    $updated += $updatedDelta;
                 } catch (\Throwable $e) {
-                    $errors[] = "Fila {$rowNum} (código '{$code}'): " . $e->getMessage();
-                    // Clear only the pending unit-of-work; detached entities (log) stay gone.
+                    if ($connection->isTransactionActive()) {
+                        $connection->rollBack();
+                    }
+
+                    $errors[] = "Fila {$rowNum}" . (isset($code) && $code !== '' ? " (código '{$code}')" : '') . ': ' . $this->normalizeImportErrorMessage($e);
+
+                    if (!$this->em->isOpen()) {
+                        throw $e;
+                    }
+
                     $this->em->clear();
+                    $log = $this->importLogRepository->find($logId);
+                    if (!$log instanceof PacaImportLog) {
+                        throw new \RuntimeException('No se pudo recargar el log de importación después de un rollback.');
+                    }
+
+                    $warehouse = $this->warehouseRepository->find($warehouseId);
+                    if (!$warehouse instanceof Warehouse) {
+                        throw new \RuntimeException('No se pudo recargar la bodega después de un rollback.');
+                    }
+
+                    $adjustmentInReason = $this->requireInventoryReason(InventoryReason::CODE_ADJ_IN);
+                    $adjustmentOutReason = $this->requireInventoryReason(InventoryReason::CODE_ADJ_OUT);
                 }
 
                 $processed++;
-                $this->flushProgress($log->getId(), $processed, $created, $updated, $errors);
+                $log->setProcessedRows($processed);
+                $log->setCreatedCount($created);
+                $log->setUpdatedCount($updated);
+                $log->setErrors($errors);
+                $log->setErrorCount(\count($errors));
+                $this->em->flush();
             }
 
-            $this->flushProgress($log->getId(), $processed, $created, $updated, $errors, PacaImportLog::STATUS_COMPLETED, new \DateTimeImmutable());
+            $log->setStatus(PacaImportLog::STATUS_COMPLETED);
+            $log->setCompletedAt(new \DateTimeImmutable());
+            $this->em->flush();
         } catch (\Throwable $e) {
-            $this->flushProgress($log->getId(), $processed, $created, $updated, $errors, PacaImportLog::STATUS_FAILED, new \DateTimeImmutable(), $e->getMessage());
+            if ($this->em->isOpen()) {
+                $log->setStatus(PacaImportLog::STATUS_FAILED);
+                $log->addError($this->normalizeImportErrorMessage($e));
+                $log->setCompletedAt(new \DateTimeImmutable());
+                $this->em->flush();
+            }
+
             throw $e;
         } finally {
             if (file_exists($filePath)) {
@@ -276,96 +367,48 @@ final readonly class PacaExcelService
             }
         }
 
-        // Re-fetch log fresh from DB (flushProgress wrote via raw SQL, ORM object is detached).
-        $freshLog = $this->importLogRepository->find($importId);
-        return $this->formatLogResponse($freshLog ?? $log);
+        return $this->formatLogResponse($log);
     }
 
-    /**
-     * Writes progress directly via SQL so concurrent /status polls see it immediately,
-     * bypassing Doctrine's identity map and any open ORM transaction.
-     *
-     * @param string[] $errors
-     */
-    private function flushProgress(
-        int $logId,
-        int $processed,
-        int $created,
-        int $updated,
-        array $errors,
-        string $status = PacaImportLog::STATUS_PROCESSING,
-        ?\DateTimeImmutable $completedAt = null,
-        ?string $extraError = null,
-    ): void {
-        if ($extraError !== null) {
-            $errors[] = $extraError;
-        }
-
-        $conn = $this->em->getConnection();
-        $conn->executeStatement(
-            'UPDATE paca_import_log
-             SET status = :status,
-                 processed_rows = :processed,
-                 created_count  = :created,
-                 updated_count  = :updated,
-                 error_count    = :errorCount,
-                 errors         = :errors,
-                 completed_at   = :completedAt
-             WHERE id = :id',
-            [
-                'id'          => $logId,
-                'status'      => $status,
-                'processed'   => $processed,
-                'created'     => $created,
-                'updated'     => $updated,
-                'errorCount'  => \count($errors),
-                'errors'      => json_encode($errors, \JSON_UNESCAPED_UNICODE),
-                'completedAt' => $completedAt?->format('Y-m-d H:i:s'),
-            ],
-        );
-    }
-
-    private function syncUnitsForImport(Paca $paca, Warehouse $warehouse, bool $isNew, bool $replaceUnits = false): void
+    private function syncUnitsForImport(Paca $paca, Warehouse $warehouse, bool $isNew, bool $replaceUnits = false): int
     {
-        $stock = $paca->getCachedStock();
+        $targetStock = $paca->getCachedStock();
+        $currentAvailableUnits = $this->countAvailableUnitsInWarehouse($paca, $warehouse);
+        $delta = $targetStock - $currentAvailableUnits;
 
         if ($isNew) {
-            if ($stock <= 0) {
-                return;
+            if ($targetStock <= 0) {
+                return 0;
             }
-            $this->createUnitsForImport($paca, $warehouse, $stock, 0);
-            return;
+            $this->createUnitsForImport($paca, $warehouse, $targetStock, 0);
+            return $targetStock;
         }
 
         if ($replaceUnits) {
-            // Delete all AVAILABLE units and recreate from serial 1
             $this->em->createQuery(
-                "DELETE FROM App\Entity\PacaUnit u WHERE u.paca = :paca AND u.status = 'AVAILABLE'"
-            )->setParameter('paca', $paca)->execute();
+                "DELETE FROM App\Entity\PacaUnit u WHERE u.paca = :paca AND u.warehouse = :warehouse AND u.status = 'AVAILABLE'"
+            )
+                ->setParameter('paca', $paca)
+                ->setParameter('warehouse', $warehouse)
+                ->execute();
 
-            if ($stock > 0) {
-                $this->createUnitsForImport($paca, $warehouse, $stock, 0);
+            if ($targetStock > 0) {
+                $this->createUnitsForImport($paca, $warehouse, $targetStock, $this->getHighestSerialOffset($paca));
             }
-            return;
+            return $targetStock - $currentAvailableUnits;
         }
 
-        // Continue mode: add units to reach desired stock, continuing from highest serial
-        if ($stock <= 0) {
-            return;
-        }
-
-        $totalUnits = (int) $this->em->createQuery(
-            'SELECT COUNT(u.id) FROM App\Entity\PacaUnit u WHERE u.paca = :paca'
-        )->setParameter('paca', $paca)->getSingleScalarResult();
-
-        $availableUnits = (int) $this->em->createQuery(
-            "SELECT COUNT(u.id) FROM App\Entity\PacaUnit u WHERE u.paca = :paca AND u.status = 'AVAILABLE'"
-        )->setParameter('paca', $paca)->getSingleScalarResult();
-
-        $delta = $stock - $availableUnits;
         if ($delta > 0) {
-            $this->createUnitsForImport($paca, $warehouse, $delta, $totalUnits);
+            $this->createUnitsForImport($paca, $warehouse, $delta, $this->getHighestSerialOffset($paca));
+            return $delta;
         }
+
+        if ($delta < 0) {
+            $this->removeAvailableUnitsForImport($paca, $warehouse, abs($delta));
+            return $delta;
+        }
+
+        return 0;
     }
 
     private function createUnitsForImport(Paca $paca, Warehouse $warehouse, int $quantity, int $serialOffset): void
@@ -378,6 +421,137 @@ final readonly class PacaExcelService
             $unit->setStatus(PacaUnit::STATUS_AVAILABLE);
             $this->em->persist($unit);
         }
+    }
+
+    private function removeAvailableUnitsForImport(Paca $paca, Warehouse $warehouse, int $quantity): void
+    {
+        if ($quantity <= 0) {
+            return;
+        }
+
+        $units = $this->em->createQueryBuilder()
+            ->select('u')
+            ->from(PacaUnit::class, 'u')
+            ->where('u.paca = :paca')
+            ->andWhere('u.warehouse = :warehouse')
+            ->andWhere('u.status = :status')
+            ->orderBy('u.id', 'DESC')
+            ->setParameter('paca', $paca)
+            ->setParameter('warehouse', $warehouse)
+            ->setParameter('status', PacaUnit::STATUS_AVAILABLE)
+            ->setMaxResults($quantity)
+            ->getQuery()
+            ->getResult();
+
+        foreach ($units as $unit) {
+            $this->em->remove($unit);
+        }
+    }
+
+    private function countAvailableUnitsInWarehouse(Paca $paca, Warehouse $warehouse): int
+    {
+        return (int) $this->em->createQuery(
+            "SELECT COUNT(u.id) FROM App\Entity\PacaUnit u WHERE u.paca = :paca AND u.warehouse = :warehouse AND u.status = 'AVAILABLE'"
+        )
+            ->setParameter('paca', $paca)
+            ->setParameter('warehouse', $warehouse)
+            ->getSingleScalarResult();
+    }
+
+    private function countTrackedUnits(Paca $paca): int
+    {
+        return (int) $this->em->createQueryBuilder()
+            ->select('COUNT(u.id)')
+            ->from(PacaUnit::class, 'u')
+            ->where('u.paca = :paca')
+            ->andWhere('u.status IN (:statuses)')
+            ->setParameter('paca', $paca)
+            ->setParameter('statuses', [
+                PacaUnit::STATUS_AVAILABLE,
+                PacaUnit::STATUS_RESERVED,
+                PacaUnit::STATUS_PICKED,
+            ])
+            ->getQuery()
+            ->getSingleScalarResult();
+    }
+
+    private function countTrackedUnitsInWarehouse(Paca $paca, Warehouse $warehouse): int
+    {
+        return (int) $this->em->createQueryBuilder()
+            ->select('COUNT(u.id)')
+            ->from(PacaUnit::class, 'u')
+            ->where('u.paca = :paca')
+            ->andWhere('u.warehouse = :warehouse')
+            ->andWhere('u.status IN (:statuses)')
+            ->setParameter('paca', $paca)
+            ->setParameter('warehouse', $warehouse)
+            ->setParameter('statuses', [
+                PacaUnit::STATUS_AVAILABLE,
+                PacaUnit::STATUS_RESERVED,
+                PacaUnit::STATUS_PICKED,
+            ])
+            ->getQuery()
+            ->getSingleScalarResult();
+    }
+
+    private function recordImportMovement(
+        Paca $paca,
+        Warehouse $warehouse,
+        ?InventoryReason $reason,
+        User $user,
+        int $quantity,
+        int $balanceAfter,
+        string $importFilename,
+    ): void {
+        if ($reason === null || $quantity <= 0) {
+            return;
+        }
+
+        $movement = new InventoryMovement();
+        $movement->setCompany($warehouse->getCompany());
+        $movement->setPaca($paca);
+        $movement->setWarehouse($warehouse);
+        $movement->setWarehouseBin(null);
+        $movement->setReason($reason);
+        $movement->setUser($user);
+        $movement->setMovementType($reason->getDirection());
+        $movement->setReferenceType('paca_import');
+        $movement->setReferenceId($paca->getId());
+        $movement->setQtyIn($reason->getDirection() === 'IN' ? $quantity : 0);
+        $movement->setQtyOut($reason->getDirection() === 'OUT' ? $quantity : 0);
+        $movement->setBalanceAfter($balanceAfter);
+        $movement->setUnitCost($paca->getPurchasePrice());
+        $movement->setNotes(sprintf('Carga masiva desde archivo %s. Stock objetivo aplicado a la bodega seleccionada; el saldo mostrado corresponde a esa bodega.', $importFilename));
+
+        $this->em->persist($movement);
+    }
+
+    private function getHighestSerialOffset(Paca $paca): int
+    {
+        $serials = $this->em->createQuery(
+            'SELECT u.serial FROM App\Entity\PacaUnit u WHERE u.paca = :paca'
+        )
+            ->setParameter('paca', $paca)
+            ->getSingleColumnResult();
+
+        $max = 0;
+        foreach ($serials as $serial) {
+            if (!is_string($serial)) {
+                continue;
+            }
+
+            $suffix = strrchr($serial, '-');
+            if ($suffix === false) {
+                continue;
+            }
+
+            $number = (int) ltrim($suffix, '-');
+            if ($number > $max) {
+                $max = $number;
+            }
+        }
+
+        return $max;
     }
 
     // ── Get import status (for polling) ──────────────────────────────
@@ -430,17 +604,17 @@ final readonly class PacaExcelService
 
         $purchasePrice = $this->getCellValue($row, $colMap, 'precio compra');
         if ($purchasePrice !== null && $purchasePrice !== '') {
-            $paca->setPurchasePrice((string) (float) str_replace(',', '.', $purchasePrice));
+            $paca->setPurchasePrice((string) (float) $purchasePrice);
         }
 
         $sellingPrice = $this->getCellValue($row, $colMap, 'precio venta');
         if ($sellingPrice !== null && $sellingPrice !== '') {
-            $paca->setSellingPrice((string) (float) str_replace(',', '.', $sellingPrice));
+            $paca->setSellingPrice((string) (float) $sellingPrice);
         }
 
         $stock = $this->getCellValue($row, $colMap, 'stock');
         if ($stock !== null && $stock !== '') {
-            $paca->setStock((int) str_replace(',', '.', $stock));
+            $paca->setStock((int) $stock);
         }
 
         $pieces = $this->getCellValue($row, $colMap, 'piezas');
@@ -515,5 +689,71 @@ final readonly class PacaExcelService
             $map[$key] = $lookup;
         }
         return $map;
+    }
+
+    private function requireInventoryReason(string $code): InventoryReason
+    {
+        $reason = $this->em->getRepository(InventoryReason::class)->findOneBy(['code' => $code]);
+        if (!$reason instanceof InventoryReason) {
+            throw new BadRequestHttpException(sprintf('No está configurado el motivo de inventario %s. Configure el catálogo antes de continuar.', $code));
+        }
+
+        return $reason;
+    }
+
+    private function normalizeImportErrorMessage(\Throwable $e): string
+    {
+        $message = trim($e->getMessage());
+        $lowerMessage = mb_strtolower($message);
+
+        if ($message === '') {
+            return 'Ocurrió un error inesperado al procesar la importación.';
+        }
+
+        if (str_contains($lowerMessage, 'entitymanager is closed')) {
+            return 'La importación se detuvo por un error interno después de procesar una fila. Revise los errores registrados anteriormente para identificar la causa original.';
+        }
+
+        if (str_contains($lowerMessage, 'duplicate entry')) {
+            if (str_contains($lowerMessage, 'serial')) {
+                return 'La paca ya existe y se intentó crear una unidad con un serial repetido. El producto existente debe actualizar stock sin reutilizar seriales ya creados.';
+            }
+
+            if (str_contains($lowerMessage, 'code')) {
+                return 'Ya existe una paca con el mismo código. Verifique que el código del archivo no esté duplicado.';
+            }
+
+            if (str_contains($lowerMessage, 'name')) {
+                return 'Ya existe una paca con el mismo nombre. Verifique nombres duplicados en el archivo o en la base de datos.';
+            }
+
+            return 'Se detectó un valor duplicado en la base de datos. Revise códigos, nombres y seriales del archivo.';
+        }
+
+        if (str_contains($lowerMessage, 'integrity constraint violation') || str_contains($lowerMessage, 'foreign key constraint fails')) {
+            return 'No se pudo guardar la información porque una relación requerida no existe o está siendo usada por otros registros.';
+        }
+
+        if (str_contains($lowerMessage, 'not null')) {
+            return 'Falta un dato obligatorio para guardar una de las filas del archivo.';
+        }
+
+        if (str_contains($lowerMessage, 'archivo de importación no encontrado')) {
+            return 'El archivo temporal de importación no fue encontrado. Vuelva a subir el archivo e inténtelo de nuevo.';
+        }
+
+        if (str_contains($lowerMessage, 'la bodega especificada no existe')) {
+            return 'La bodega seleccionada no existe o ya no está disponible.';
+        }
+
+        if (str_contains($lowerMessage, 'esta importación ya fue procesada')) {
+            return 'Esta importación ya fue procesada anteriormente. Suba un archivo nuevo si desea volver a importar.';
+        }
+
+        if (str_contains($lowerMessage, 'el archivo no contiene')) {
+            return $message;
+        }
+
+        return $message;
     }
 }

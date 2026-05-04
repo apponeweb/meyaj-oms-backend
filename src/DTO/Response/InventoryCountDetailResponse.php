@@ -19,6 +19,7 @@ final readonly class InventoryCountDetailResponse
     public ?int $firstCountedQty;
     public ?int $firstDifference;
     public ?string $firstCountedAt;
+    public ?array $scannedSerials;
 
     public function __construct(InventoryCountDetail $d)
     {
@@ -37,5 +38,6 @@ final readonly class InventoryCountDetailResponse
         $this->firstCountedQty = $d->getFirstCountedQty();
         $this->firstDifference = $d->getFirstDifference();
         $this->firstCountedAt = $d->getFirstCountedAt()?->format(\DateTimeInterface::ATOM);
+        $this->scannedSerials = $d->getScannedSerials();
     }
 }

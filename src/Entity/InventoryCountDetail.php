@@ -50,6 +50,9 @@ class InventoryCountDetail
     #[ORM\Column(nullable: true)]
     private ?\DateTimeImmutable $firstCountedAt = null;
 
+    #[ORM\Column(type: 'json', nullable: true)]
+    private ?array $scannedSerials = null;
+
     public function getId(): ?int { return $this->id; }
 
     public function getInventoryCount(): InventoryCount { return $this->inventoryCount; }
@@ -84,4 +87,7 @@ class InventoryCountDetail
 
     public function getFirstCountedAt(): ?\DateTimeImmutable { return $this->firstCountedAt; }
     public function setFirstCountedAt(?\DateTimeImmutable $firstCountedAt): static { $this->firstCountedAt = $firstCountedAt; return $this; }
+
+    public function getScannedSerials(): ?array { return $this->scannedSerials; }
+    public function setScannedSerials(?array $scannedSerials): static { $this->scannedSerials = $scannedSerials; return $this; }
 }

@@ -21,6 +21,7 @@ use App\Repository\InventoryMovementRepository;
 use App\Repository\PacaUnitRepository;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\HttpKernel\Exception\ConflictHttpException;
+use Symfony\Component\HttpKernel\Exception\BadRequestHttpException;
 
 final readonly class InventoryManager
 {
@@ -44,29 +45,32 @@ final readonly class InventoryManager
         ?string $unitCost = null,
         ?string $notes = null,
         bool $forceAdjustment = false,
+        bool $affectsCachedStock = true,
         ?PacaUnit $pacaUnit = null,
     ): InventoryMovement {
         $movementType = $reason->getDirection();
         $actualQty = $quantity;
 
-        if ($movementType === 'OUT') {
-            if (!$forceAdjustment && $paca->getCachedStock() < $quantity) {
-                throw new ConflictHttpException(
-                    sprintf(
-                        'Stock insuficiente para paca %s. Stock actual: %d, requerido: %d',
-                        $paca->getCode(),
-                        $paca->getCachedStock(),
-                        $quantity,
-                    ),
-                );
+        if ($affectsCachedStock) {
+            if ($movementType === 'OUT') {
+                if (!$forceAdjustment && $paca->getCachedStock() < $quantity) {
+                    throw new ConflictHttpException(
+                        sprintf(
+                            'Stock insuficiente para paca %s. Stock actual: %d, requerido: %d',
+                            $paca->getCode(),
+                            $paca->getCachedStock(),
+                            $quantity,
+                        ),
+                    );
+                }
+                if ($forceAdjustment && $paca->getCachedStock() < $quantity) {
+                    $actualQty = $paca->getCachedStock();
+                    $notes = sprintf('%s [Stock insuficiente: se ajustaron %d de %d unidades]', $notes ?? '', $actualQty, $quantity);
+                }
+                $paca->setCachedStock($paca->getCachedStock() - $actualQty);
+            } else {
+                $paca->setCachedStock($paca->getCachedStock() + $actualQty);
             }
-            if ($forceAdjustment && $paca->getCachedStock() < $quantity) {
-                $actualQty = $paca->getCachedStock();
-                $notes = sprintf('%s [Stock insuficiente: se ajustaron %d de %d unidades]', $notes ?? '', $actualQty, $quantity);
-            }
-            $paca->setCachedStock($paca->getCachedStock() - $actualQty);
-        } else {
-            $paca->setCachedStock($paca->getCachedStock() + $actualQty);
         }
 
         $movement = new InventoryMovement();
@@ -133,6 +137,7 @@ final readonly class InventoryManager
             $unit->setStatus(PacaUnit::STATUS_RESERVED);
             $unit->setSalesOrder($salesOrder);
             $unit->setSalesOrderItem($salesOrderItem);
+            $this->recordLogicalReservationTrace($unit, $salesOrder, 'Unidad reservada lógicamente para pedido');
         }
 
         $this->em->flush();
@@ -152,6 +157,7 @@ final readonly class InventoryManager
         ]);
 
         foreach ($units as $unit) {
+            $this->recordLogicalReleaseTrace($unit, $salesOrder, 'Unidad liberada lógicamente por reversión de reserva');
             $unit->setStatus(PacaUnit::STATUS_AVAILABLE);
             $unit->setSalesOrder(null);
             $unit->setSalesOrderItem(null);
@@ -171,6 +177,7 @@ final readonly class InventoryManager
 
         foreach ($units as $unit) {
             if (in_array($unit->getStatus(), [PacaUnit::STATUS_RESERVED, PacaUnit::STATUS_PICKED], true)) {
+                $this->recordLogicalReleaseTrace($unit, $salesOrder, 'Unidad liberada lógicamente por reversión de reserva');
                 $unit->setStatus(PacaUnit::STATUS_AVAILABLE);
                 $unit->setSalesOrder(null);
                 $unit->setSalesOrderItem(null);
@@ -185,19 +192,7 @@ final readonly class InventoryManager
      */
     public function updateCachedStock(Paca $paca): void
     {
-        $count = (int) $this->em->createQueryBuilder()
-            ->select('COUNT(pu.id)')
-            ->from(PacaUnit::class, 'pu')
-            ->where('pu.paca = :paca')
-            ->andWhere('pu.status IN (:statuses)')
-            ->setParameter('paca', $paca)
-            ->setParameter('statuses', [
-                PacaUnit::STATUS_AVAILABLE,
-                PacaUnit::STATUS_RESERVED,
-                PacaUnit::STATUS_PICKED,
-            ])
-            ->getQuery()
-            ->getSingleScalarResult();
+        $count = $this->pacaUnitRepo->countTrackedByPaca($paca->getId());
 
         $paca->setCachedStock($count);
         $this->em->flush();
@@ -215,5 +210,69 @@ final readonly class InventoryManager
             ),
             meta: $result->meta,
         );
+    }
+
+    private function recordLogicalReservationTrace(PacaUnit $unit, SalesOrder $salesOrder, string $notes): void
+    {
+        $reason = $this->resolveLogicalReason(InventoryReason::CODE_RESERVE);
+
+        $this->recordMovement(
+            paca: $unit->getPaca(),
+            warehouse: $unit->getWarehouse(),
+            bin: $unit->getWarehouseBin(),
+            reason: $reason,
+            user: $salesOrder->getUser(),
+            quantity: 0,
+            referenceType: 'sales_order',
+            referenceId: $salesOrder->getId(),
+            notes: sprintf('%s %s', $notes, $salesOrder->getFolio()),
+            pacaUnit: $unit,
+        );
+    }
+
+    private function recordLogicalReleaseTrace(PacaUnit $unit, SalesOrder $salesOrder, string $notes): void
+    {
+        $reason = $this->resolveLogicalReason(InventoryReason::CODE_RELEASE);
+
+        $this->recordMovement(
+            paca: $unit->getPaca(),
+            warehouse: $unit->getWarehouse(),
+            bin: $unit->getWarehouseBin(),
+            reason: $reason,
+            user: $salesOrder->getUser(),
+            quantity: 0,
+            referenceType: 'sales_order',
+            referenceId: $salesOrder->getId(),
+            notes: sprintf('%s %s', $notes, $salesOrder->getFolio()),
+            pacaUnit: $unit,
+        );
+    }
+
+    private function resolveLogicalReason(string $code): InventoryReason
+    {
+        $reason = $this->em->getRepository(InventoryReason::class)->findOneBy(['code' => $code]);
+        if ($reason instanceof InventoryReason) {
+            return $reason;
+        }
+
+        $reason = new InventoryReason();
+        $reason->setCode($code);
+        $reason->setName(match ($code) {
+            InventoryReason::CODE_RESERVE => 'Reserva lógica',
+            InventoryReason::CODE_RELEASE => 'Liberación lógica',
+            default => throw new BadRequestHttpException(sprintf('Motivo lógico no soportado: %s', $code)),
+        });
+        $reason->setDirection(match ($code) {
+            InventoryReason::CODE_RESERVE => 'OUT',
+            InventoryReason::CODE_RELEASE => 'IN',
+            default => throw new BadRequestHttpException(sprintf('Motivo lógico no soportado: %s', $code)),
+        });
+        $reason->setRequiresReference(true);
+        $reason->setIsActive(true);
+
+        $this->em->persist($reason);
+        $this->em->flush();
+
+        return $reason;
     }
 }

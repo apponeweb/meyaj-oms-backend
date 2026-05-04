@@ -32,6 +32,25 @@ class RoleActionPermissionRepository extends ServiceEntityRepository
             ->getResult();
     }
 
+    public function roleHasAllowedActionByCodes(int $roleId, string $functionCode, string $actionCode): bool
+    {
+        $count = $this->createQueryBuilder('rap')
+            ->select('COUNT(rap.id)')
+            ->join('rap.action', 'a')
+            ->join('rap.appFunction', 'f')
+            ->where('rap.role = :roleId')
+            ->andWhere('f.code = :functionCode')
+            ->andWhere('a.code = :actionCode')
+            ->andWhere('rap.allowed = true')
+            ->setParameter('roleId', $roleId)
+            ->setParameter('functionCode', $functionCode)
+            ->setParameter('actionCode', $actionCode)
+            ->getQuery()
+            ->getSingleScalarResult();
+
+        return (int) $count > 0;
+    }
+
     /** @return RoleActionPermission[] */
     public function findByRoleAndModuleFunctions(int $roleId, int $moduleId): array
     {

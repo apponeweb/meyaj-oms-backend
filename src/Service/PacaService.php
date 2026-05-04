@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace App\Service;
 
+use App\DTO\Request\BulkUpdatePacaRequest;
 use App\DTO\Request\CreatePacaRequest;
 use App\DTO\Request\UpdatePacaRequest;
 use App\DTO\Response\PacaResponse;
+use App\Entity\InventoryMovement;
 use App\Entity\InventoryReason;
 use App\Entity\Paca;
 use App\Entity\PacaUnit;
@@ -18,9 +20,11 @@ use App\Pagination\PaginationRequest;
 use App\Pagination\Paginator;
 use App\Repository\PacaRepository;
 use App\Repository\PacaUnitRepository;
+use App\Repository\RoleActionPermissionRepository;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\HttpFoundation\Request;
-use Symfony\Component\HttpKernel\Exception\ConflictHttpException;
+use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
+use Symfony\Component\HttpKernel\Exception\BadRequestHttpException;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 
 final readonly class PacaService
@@ -29,8 +33,10 @@ final readonly class PacaService
         private EntityManagerInterface $em,
         private PacaRepository $pacaRepository,
         private PacaUnitRepository $pacaUnitRepo,
+        private RoleActionPermissionRepository $roleActionPermissionRepository,
         private Paginator $paginator,
         private InventoryManager $inventoryManager,
+        private OperationMode $operationMode,
     ) {}
 
     public function list(
@@ -54,12 +60,24 @@ final readonly class PacaService
         $result = $this->paginator->paginate($qb, $pagination);
 
         $pacaIds = array_map(static fn (Paca $p) => $p->getId(), $result->data);
-        $availableStock = $this->pacaUnitRepo->countAvailableByPacaIds($pacaIds);
+        $hasLocationFilter = $warehouseId !== null || $warehouseBinId !== null;
+        $availableStock = $hasLocationFilter
+            ? $this->pacaUnitRepo->countAvailableByPacaIdsFiltered($pacaIds, $warehouseId, $warehouseBinId)
+            : $this->pacaUnitRepo->countAvailableByPacaIds($pacaIds);
+        $reservedStock = $hasLocationFilter
+            ? $this->pacaUnitRepo->countReservedByPacaIdsFiltered($pacaIds, $warehouseId, $warehouseBinId)
+            : $this->pacaUnitRepo->countReservedByPacaIds($pacaIds);
+        $trackedStock = $hasLocationFilter
+            ? $this->pacaUnitRepo->countTrackedByPacaIdsFiltered($pacaIds, $warehouseId, $warehouseBinId)
+            : $this->pacaUnitRepo->countTrackedByPacaIds($pacaIds);
 
         return new PaginatedResponse(
             data: array_map(static fn (Paca $p) => new PacaResponse(
                 $p,
                 $availableStock[$p->getId()] ?? 0,
+                null,
+                $trackedStock[$p->getId()] ?? 0,
+                $reservedStock[$p->getId()] ?? 0,
             ), $result->data),
             meta: $result->meta,
         );
@@ -69,9 +87,11 @@ final readonly class PacaService
     {
         $p = $this->pacaRepository->find($id);
         if ($p === null) throw new NotFoundHttpException(\sprintf('Paca con ID %d no encontrada.', $id));
-        $availableStock = $this->pacaUnitRepo->countAvailableByPaca($p);
-        $stockByWarehouse = $this->pacaUnitRepo->countByPacaAndWarehouse($p);
-        return new PacaResponse($p, $availableStock, $stockByWarehouse);
+        $availableStock = $this->pacaUnitRepo->countAvailableByPaca($p->getId());
+        $reservedStock = $this->pacaUnitRepo->countReservedByPaca($p->getId());
+        $stockByWarehouse = $this->pacaUnitRepo->countByPacaAndWarehouse($p->getId());
+        $trackedStock = $this->pacaUnitRepo->countTrackedByPaca($p->getId());
+        return new PacaResponse($p, $availableStock, $stockByWarehouse, $trackedStock, $reservedStock);
     }
 
     public function getNextCode(): array
@@ -133,40 +153,79 @@ final readonly class PacaService
         return new PacaResponse($p);
     }
 
+    public function bulkUpdate(BulkUpdatePacaRequest $r, ?User $user): array
+    {
+        if ($user === null || $user->getRole() === null) {
+            throw new AccessDeniedHttpException('No tiene permisos para actualizar pacas masivamente.');
+        }
+
+        $hasPermission = $this->roleActionPermissionRepository->roleHasAllowedActionByCodes(
+            $user->getRole()->getId(),
+            'pacas',
+            'update',
+        );
+
+        if (!$hasPermission) {
+            throw new AccessDeniedHttpException('No tiene permisos para actualizar pacas masivamente.');
+        }
+
+        $pacaIds = array_values(array_unique(array_map('intval', $r->pacaIds)));
+        if ($pacaIds === []) {
+            throw new BadRequestHttpException('Debe proporcionar al menos una paca para actualizar.');
+        }
+
+        $pacas = $this->pacaRepository->findBy(['id' => $pacaIds]);
+        if ($pacas === []) {
+            throw new NotFoundHttpException('No se encontraron pacas para actualizar.');
+        }
+
+        foreach ($pacas as $paca) {
+            if ($r->purchasePrice !== null) {
+                $paca->setPurchasePrice($r->purchasePrice);
+            }
+
+            if ($r->sellingPrice !== null) {
+                $paca->setSellingPrice($r->sellingPrice);
+            }
+
+            $this->setRelations(
+                $paca,
+                $r->brandId,
+                $r->labelId,
+                $r->qualityGradeId,
+                $r->seasonId,
+                $r->genderId,
+                $r->garmentTypeId,
+                $r->fabricTypeId,
+                $r->sizeProfileId,
+                $r->supplierId,
+            );
+        }
+
+        $this->em->flush();
+
+        return [
+            'requested' => count($pacaIds),
+            'updated' => count($pacas),
+        ];
+    }
+
     public function delete(int $id): void
     {
         $p = $this->pacaRepository->find($id);
-        if ($p === null) {
-            throw new NotFoundHttpException(sprintf('Paca con ID %d no encontrada.', $id));
+        if ($p === null) throw new NotFoundHttpException(sprintf('Paca con ID %d no encontrada.', $id));
+        if ($this->operationMode->isInitializing()) {
+            $this->deleteForInitialization($p);
+            return;
         }
-
-        // Block if referenced by sales order items (paca_id RESTRICT)
-        $soCount = (int) $this->em->createQuery(
-            'SELECT COUNT(i.id) FROM App\Entity\SalesOrderItem i WHERE i.paca = :paca'
-        )->setParameter('paca', $p)->getSingleScalarResult();
-
-        if ($soCount > 0) {
-            throw new ConflictHttpException(
-                "No se puede eliminar la paca '{$p->getCode()}': tiene {$soCount} ítem(s) en órdenes de venta."
-            );
+        $unitsCount = $this->pacaUnitRepo->count(['paca' => $p]);
+        if ($unitsCount > 0) {
+            throw new BadRequestHttpException(sprintf(
+                'No se puede eliminar la paca %s porque tiene %d unidad(es) asociada(s). Elimine primero sus unidades de inventario.',
+                $p->getCode(),
+                $unitsCount,
+            ));
         }
-
-        // Block if any unit is referenced by a shipment order item (paca_unit_id RESTRICT)
-        $shipCount = (int) $this->em->createQuery(
-            'SELECT COUNT(s.id) FROM App\Entity\ShipmentOrderItem s WHERE s.pacaUnit IN (SELECT u.id FROM App\Entity\PacaUnit u WHERE u.paca = :paca)'
-        )->setParameter('paca', $p)->getSingleScalarResult();
-
-        if ($shipCount > 0) {
-            throw new ConflictHttpException(
-                "No se puede eliminar la paca '{$p->getCode()}': tiene unidades en {$shipCount} ítem(s) de envío."
-            );
-        }
-
-        // Delete all units (and their inventory movements via CASCADE in DB) first
-        $this->em->createQuery(
-            'DELETE FROM App\Entity\PacaUnit u WHERE u.paca = :paca'
-        )->setParameter('paca', $p)->execute();
-
         $this->em->remove($p);
         $this->em->flush();
     }
@@ -186,6 +245,17 @@ final readonly class PacaService
         $warehouseBin = null;
         if ($warehouseBinId !== null) {
             $warehouseBin = $this->em->find(WarehouseBin::class, $warehouseBinId);
+            if ($warehouseBin === null) {
+                throw new NotFoundHttpException(sprintf('Ubicación con ID %d no encontrada.', $warehouseBinId));
+            }
+
+            if ($warehouseBin->getWarehouse()->getId() !== $warehouse->getId()) {
+                throw new BadRequestHttpException(sprintf(
+                    'La ubicación %s no pertenece al almacén %s.',
+                    $warehouseBin->getName(),
+                    $warehouse->getName(),
+                ));
+            }
         }
 
         // Create PacaUnits
@@ -201,29 +271,181 @@ final readonly class PacaService
             $this->em->persist($unit);
         }
 
-        // Record inventory movement
-        $reason = $this->em->getRepository(InventoryReason::class)->findOneBy(['code' => 'ADJUSTMENT_IN']);
-        if ($reason !== null && $user !== null) {
-            $this->inventoryManager->recordMovement(
-                paca: $paca,
-                warehouse: $warehouse,
-                bin: $warehouseBin,
-                reason: $reason,
-                user: $user,
-                quantity: $quantity,
-                referenceType: 'manual_stock',
-                notes: sprintf('Carga de stock manual: %d unidades en %s', $quantity, $warehouse->getName()),
-            );
-        }
-
         $this->em->flush();
 
-        // Refresh stock
         $this->inventoryManager->updateCachedStock($paca);
+
+        // Record inventory movement
+        if ($user === null) {
+            throw new BadRequestHttpException('No se pudo identificar el usuario para registrar el movimiento de inventario.');
+        }
+
+        $reason = $this->resolveAdjustmentInReason();
+        $this->recordAddStockMovement(
+            paca: $paca,
+            warehouse: $warehouse,
+            warehouseBin: $warehouseBin,
+            reason: $reason,
+            user: $user,
+            quantity: $quantity,
+            notes: sprintf('Carga de stock manual: %d unidades en %s', $quantity, $warehouse->getName()),
+        );
 
         $available = $this->pacaUnitRepo->countAvailableByPaca($paca->getId());
         $stockByWarehouse = $this->pacaUnitRepo->countByPacaAndWarehouse($paca->getId());
-        return new PacaResponse($paca, $available, $stockByWarehouse);
+        $trackedStock = $this->pacaUnitRepo->countTrackedByPaca($paca->getId());
+        return new PacaResponse($paca, $available, $stockByWarehouse, $trackedStock);
+    }
+
+    private function recordAddStockMovement(
+        Paca $paca,
+        Warehouse $warehouse,
+        ?WarehouseBin $warehouseBin,
+        InventoryReason $reason,
+        User $user,
+        int $quantity,
+        string $notes,
+    ): void {
+        $movement = new InventoryMovement();
+        $movement->setCompany($warehouse->getCompany());
+        $movement->setPaca($paca);
+        $movement->setWarehouse($warehouse);
+        $movement->setWarehouseBin($warehouseBin);
+        $movement->setReason($reason);
+        $movement->setUser($user);
+        $movement->setMovementType($reason->getDirection());
+        $movement->setReferenceType('manual_stock');
+        $movement->setReferenceId(null);
+        $movement->setQtyIn($quantity);
+        $movement->setQtyOut(0);
+        $movement->setBalanceAfter($this->countTrackedUnitsInWarehouse($paca, $warehouse));
+        $movement->setUnitCost($paca->getPurchasePrice());
+        $movement->setNotes($notes);
+
+        $this->em->persist($movement);
+        $this->em->flush();
+    }
+
+    private function countTrackedUnitsInWarehouse(Paca $paca, Warehouse $warehouse): int
+    {
+        return (int) $this->em->createQueryBuilder()
+            ->select('COUNT(u.id)')
+            ->from(PacaUnit::class, 'u')
+            ->where('u.paca = :paca')
+            ->andWhere('u.warehouse = :warehouse')
+            ->andWhere('u.status IN (:statuses)')
+            ->setParameter('paca', $paca)
+            ->setParameter('warehouse', $warehouse)
+            ->setParameter('statuses', [
+                PacaUnit::STATUS_AVAILABLE,
+                PacaUnit::STATUS_RESERVED,
+                PacaUnit::STATUS_PICKED,
+            ])
+            ->getQuery()
+            ->getSingleScalarResult();
+    }
+
+    private function resolveAdjustmentInReason(): InventoryReason
+    {
+        $reason = $this->em->getRepository(InventoryReason::class)->findOneBy([
+            'code' => InventoryReason::CODE_ADJ_IN,
+        ]);
+
+        if ($reason instanceof InventoryReason) {
+            return $reason;
+        }
+
+        $reason = new InventoryReason();
+        $reason->setCode(InventoryReason::CODE_ADJ_IN);
+        $reason->setName('Ajuste Entrada');
+        $reason->setDirection('IN');
+        $reason->setRequiresReference(false);
+        $reason->setIsActive(true);
+
+        $this->em->persist($reason);
+        $this->em->flush();
+
+        return $reason;
+    }
+
+    private function deleteForInitialization(Paca $paca): void
+    {
+        $unitIds = array_map(
+            static fn (PacaUnit $unit) => $unit->getId(),
+            $this->em->createQuery('SELECT pu FROM App\\Entity\\PacaUnit pu WHERE pu.paca = :paca')
+                ->setParameter('paca', $paca)
+                ->getResult(),
+        );
+
+        $salesOrderIds = array_map(
+            static fn (array $row) => (int) $row['id'],
+            $this->em->createQuery(
+                'SELECT DISTINCT so.id AS id
+                 FROM App\\Entity\\SalesOrder so
+                 INNER JOIN so.items soi
+                 WHERE soi.paca = :paca'
+            )
+                ->setParameter('paca', $paca)
+                ->getArrayResult(),
+        );
+
+        if (!empty($unitIds)) {
+            $this->em->createQuery('DELETE FROM App\\Entity\\ShipmentOrderItem soi WHERE soi.pacaUnit IN (:unitIds)')
+                ->setParameter('unitIds', $unitIds)
+                ->execute();
+
+            $this->em->createQuery('DELETE FROM App\\Entity\\InventoryMovement im WHERE im.pacaUnit IN (:unitIds)')
+                ->setParameter('unitIds', $unitIds)
+                ->execute();
+
+            $this->em->createQuery('DELETE FROM App\\Entity\\PacaUnit pu WHERE pu.id IN (:unitIds)')
+                ->setParameter('unitIds', $unitIds)
+                ->execute();
+        }
+
+        if (!empty($salesOrderIds)) {
+            $shipmentIds = array_map(
+                static fn (array $row) => (int) $row['id'],
+                $this->em->createQuery('SELECT sh.id AS id FROM App\\Entity\\ShipmentOrder sh WHERE sh.salesOrder IN (:salesOrderIds)')
+                    ->setParameter('salesOrderIds', $salesOrderIds)
+                    ->getArrayResult(),
+            );
+
+            if (!empty($shipmentIds)) {
+                $this->em->createQuery('DELETE FROM App\\Entity\\ShipmentOrderItem soi WHERE soi.shipmentOrder IN (:shipmentIds)')
+                    ->setParameter('shipmentIds', $shipmentIds)
+                    ->execute();
+
+                $this->em->createQuery("DELETE FROM App\\Entity\\InventoryMovement im WHERE im.referenceType = :shipmentType AND im.referenceId IN (:shipmentIds)")
+                    ->setParameter('shipmentType', 'shipment_order')
+                    ->setParameter('shipmentIds', $shipmentIds)
+                    ->execute();
+
+                $this->em->createQuery('DELETE FROM App\\Entity\\ShipmentOrder sh WHERE sh.id IN (:shipmentIds)')
+                    ->setParameter('shipmentIds', $shipmentIds)
+                    ->execute();
+            }
+
+            $this->em->createQuery("DELETE FROM App\\Entity\\InventoryMovement im WHERE im.referenceType = :salesType AND im.referenceId IN (:salesOrderIds)")
+                ->setParameter('salesType', 'sales_order')
+                ->setParameter('salesOrderIds', $salesOrderIds)
+                ->execute();
+
+            $this->em->createQuery('DELETE FROM App\\Entity\\SalesOrderStatusHistory sosh WHERE sosh.salesOrder IN (:salesOrderIds)')
+                ->setParameter('salesOrderIds', $salesOrderIds)
+                ->execute();
+
+            $this->em->createQuery('DELETE FROM App\\Entity\\SalesOrderItem soi WHERE soi.salesOrder IN (:salesOrderIds)')
+                ->setParameter('salesOrderIds', $salesOrderIds)
+                ->execute();
+
+            $this->em->createQuery('DELETE FROM App\\Entity\\SalesOrder so WHERE so.id IN (:salesOrderIds)')
+                ->setParameter('salesOrderIds', $salesOrderIds)
+                ->execute();
+        }
+
+        $this->em->remove($paca);
+        $this->em->flush();
     }
 
     private function setRelations(Paca $p, ?int $brandId, ?int $labelId, ?int $qualityGradeId, ?int $seasonId, ?int $genderId, ?int $garmentTypeId, ?int $fabricTypeId, ?int $sizeProfileId, ?int $supplierId): void

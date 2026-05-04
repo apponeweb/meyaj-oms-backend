@@ -35,6 +35,7 @@ final readonly class InventoryCountService
         private PacaUnitRepository $pacaUnitRepo,
         private InventoryManager $inventoryManager,
         private Paginator $paginator,
+        private OperationMode $operationMode,
     ) {
     }
 
@@ -153,7 +154,7 @@ final readonly class InventoryCountService
         ];
     }
 
-    public function updateDetail(int $countId, int $detailId, ?int $countedQty, ?string $notes): InventoryCountDetailResponse
+    public function updateDetail(int $countId, int $detailId, ?int $countedQty, ?string $notes, ?array $scannedSerials = null): InventoryCountDetailResponse
     {
         $count = $this->countRepository->find($countId);
         if ($count === null) {
@@ -174,6 +175,13 @@ final readonly class InventoryCountService
 
         if ($detail === null) {
             throw new NotFoundHttpException(sprintf('Detalle de conteo con ID %d no encontrado.', $detailId));
+        }
+
+        if ($scannedSerials !== null) {
+            $normalizedSerials = $this->normalizeScannedSerials($scannedSerials);
+            $this->assertScannedSerialsBelongToDetail($detail, $count->getWarehouse(), $normalizedSerials);
+            $detail->setScannedSerials($normalizedSerials);
+            $countedQty = count($normalizedSerials);
         }
 
         if ($countedQty !== null) {
@@ -221,15 +229,27 @@ final readonly class InventoryCountService
         ]);
 
         $discrepancies = 0;
+        $affectedPacas = [];
+        $warnings = [];
 
         foreach ($count->getDetails() as $detail) {
             $diff = $detail->getDifference();
-            if ($diff !== null && $diff !== 0) {
+            $paca = $detail->getPaca();
+            $warehouse = $count->getWarehouse();
+            $affectedPacas[$paca->getId()] = $paca;
+            $scannedSerials = $detail->getScannedSerials() ?? [];
+
+            if ($scannedSerials !== []) {
+                if (($diff ?? 0) !== 0) {
+                    $discrepancies++;
+                    $detail->setStatus('ADJUSTED');
+                }
+
+                $adjustmentResult = $this->applyScannedSerialAdjustment($detail, $warehouse);
+                $warnings = array_merge($warnings, $adjustmentResult['warnings']);
+            } elseif ($diff !== null && $diff !== 0) {
                 $discrepancies++;
                 $detail->setStatus('ADJUSTED');
-
-                $paca = $detail->getPaca();
-                $warehouse = $count->getWarehouse();
 
                 if ($diff > 0 && $adjustmentIn !== null) {
                     // Surplus: create new PacaUnits
@@ -241,18 +261,6 @@ final readonly class InventoryCountService
                         $unit->setWarehouse($warehouse);
                         $this->em->persist($unit);
                     }
-                    $this->inventoryManager->recordMovement(
-                        paca: $paca,
-                        warehouse: $warehouse,
-                        bin: null,
-                        reason: $adjustmentIn,
-                        user: $user,
-                        quantity: abs($diff),
-                        referenceType: 'INVENTORY_COUNT',
-                        referenceId: $count->getId(),
-                        notes: sprintf('Ajuste por conteo físico %s', $count->getFolio()),
-                        forceAdjustment: true,
-                    );
                 } elseif ($diff < 0 && $adjustmentOut !== null) {
                     // Shortage: mark PacaUnits as DAMAGED
                     $unitsToMark = $this->pacaUnitRepo->findAvailableInWarehouse(
@@ -263,40 +271,77 @@ final readonly class InventoryCountService
                     foreach ($unitsToMark as $unit) {
                         $unit->setStatus(PacaUnit::STATUS_DAMAGED);
                     }
-                    $this->inventoryManager->recordMovement(
-                        paca: $paca,
+                    if (count($unitsToMark) < abs($diff)) {
+                        $warnings[] = sprintf(
+                            '%s: se requería ajustar -%d pero solo había %d disponibles en %s.',
+                            $paca->getCode(),
+                            abs($diff),
+                            count($unitsToMark),
+                            $warehouse->getName(),
+                        );
+                    }
+                }
+            }
+        }
+
+        $this->em->flush();
+
+        foreach ($affectedPacas as $paca) {
+            $this->inventoryManager->updateCachedStock($paca);
+        }
+
+        foreach ($count->getDetails() as $detail) {
+            $diff = $detail->getDifference() ?? 0;
+            $paca = $detail->getPaca();
+            $warehouse = $count->getWarehouse();
+            $scannedSerials = $detail->getScannedSerials() ?? [];
+
+            if ($scannedSerials !== []) {
+                if ($adjustmentIn !== null || $adjustmentOut !== null) {
+                    $this->recordScannedCountMovement(
+                        detail: $detail,
                         warehouse: $warehouse,
-                        bin: null,
-                        reason: $adjustmentOut,
+                        adjustmentIn: $adjustmentIn,
+                        adjustmentOut: $adjustmentOut,
                         user: $user,
-                        quantity: abs($diff),
-                        referenceType: 'INVENTORY_COUNT',
                         referenceId: $count->getId(),
                         notes: sprintf('Ajuste por conteo físico %s', $count->getFolio()),
-                        forceAdjustment: true,
                     );
                 }
+            } elseif ($diff > 0 && $adjustmentIn !== null) {
+                $this->recordCountMovement(
+                    paca: $paca,
+                    warehouse: $warehouse,
+                    reason: $adjustmentIn,
+                    user: $user,
+                    quantityIn: abs($diff),
+                    quantityOut: 0,
+                    referenceId: $count->getId(),
+                    notes: sprintf('Ajuste por conteo físico %s', $count->getFolio()),
+                );
+            } elseif ($diff < 0 && $adjustmentOut !== null) {
+                $actualOut = min(abs($diff), max(0, $detail->getSystemQty() - ($detail->getCountedQty() ?? 0)));
+                $this->recordCountMovement(
+                    paca: $paca,
+                    warehouse: $warehouse,
+                    reason: $adjustmentOut,
+                    user: $user,
+                    quantityIn: 0,
+                    quantityOut: $actualOut,
+                    referenceId: $count->getId(),
+                    notes: sprintf('Ajuste por conteo físico %s', $count->getFolio()),
+                );
             } else {
-                // diff = 0: record a verification entry in the kardex without altering stock
-                $paca = $detail->getPaca();
-                $warehouse = $count->getWarehouse();
                 $verifyReason = $adjustmentIn ?? $this->em->getRepository(InventoryReason::class)->findOneBy([]);
                 if ($verifyReason !== null) {
-                    $mov = new InventoryMovement();
-                    $mov->setCompany($warehouse->getCompany());
-                    $mov->setPaca($paca);
-                    $mov->setWarehouse($warehouse);
-                    $mov->setWarehouseBin(null);
-                    $mov->setReason($verifyReason);
-                    $mov->setUser($user);
-                    $mov->setMovementType('CNT');
-                    $mov->setReferenceType('INVENTORY_COUNT');
-                    $mov->setReferenceId($count->getId());
-                    $mov->setQtyIn($detail->getSystemQty());
-                    $mov->setQtyOut(0);
-                    $mov->setBalanceAfter($paca->getCachedStock());
-                    $mov->setNotes(sprintf('Constatación conteo físico %s', $count->getFolio()));
-                    $this->em->persist($mov);
+                    $this->recordCountVerificationMovement(
+                        paca: $paca,
+                        warehouse: $warehouse,
+                        reason: $verifyReason,
+                        user: $user,
+                        referenceId: $count->getId(),
+                        notes: sprintf('Constatación conteo físico %s', $count->getFolio()),
+                    );
                 }
             }
         }
@@ -370,6 +415,7 @@ final readonly class InventoryCountService
         $adjustmentOut = $this->em->getRepository(InventoryReason::class)->findOneBy(['code' => 'ADJUSTMENT_OUT']);
 
         $warnings = [];
+        $affectedPacas = [];
 
         foreach ($count->getDetails() as $detail) {
             if ($detail->getStatus() !== 'RECOUNTED') {
@@ -378,18 +424,21 @@ final readonly class InventoryCountService
 
             $firstCounted = $detail->getFirstCountedQty();
             $recounted = $detail->getCountedQty();
+            $scannedSerials = $detail->getScannedSerials() ?? [];
 
             if ($firstCounted === null || $recounted === null) {
                 continue;
             }
 
             $correction = $recounted - $firstCounted;
+            $paca = $detail->getPaca();
+            $warehouse = $count->getWarehouse();
+            $affectedPacas[$paca->getId()] = $paca;
 
-            if ($correction !== 0) {
-                $paca = $detail->getPaca();
-                $warehouse = $count->getWarehouse();
-                $stockBefore = $paca->getStock();
-
+            if ($scannedSerials !== []) {
+                $adjustmentResult = $this->applyScannedSerialAdjustment($detail, $warehouse);
+                $warnings = array_merge($warnings, $adjustmentResult['warnings']);
+            } elseif ($correction !== 0) {
                 if ($correction > 0 && $adjustmentIn !== null) {
                     // Surplus: create new PacaUnits
                     $existingCount = $this->em->getRepository(PacaUnit::class)->count(['paca' => $paca]);
@@ -400,18 +449,6 @@ final readonly class InventoryCountService
                         $unit->setWarehouse($warehouse);
                         $this->em->persist($unit);
                     }
-                    $this->inventoryManager->recordMovement(
-                        paca: $paca,
-                        warehouse: $warehouse,
-                        bin: null,
-                        reason: $adjustmentIn,
-                        user: $user,
-                        quantity: abs($correction),
-                        referenceType: 'INVENTORY_COUNT',
-                        referenceId: $count->getId(),
-                        notes: sprintf('Corrección por reconteo %s (1er: %d, 2do: %d)', $count->getFolio(), $firstCounted, $recounted),
-                        forceAdjustment: true,
-                    );
                 } elseif ($correction < 0 && $adjustmentOut !== null) {
                     $requiredOut = abs($correction);
                     // Shortage: mark PacaUnits as DAMAGED
@@ -432,40 +469,71 @@ final readonly class InventoryCountService
                             count($unitsToMark),
                         );
                     }
-                    $this->inventoryManager->recordMovement(
-                        paca: $paca,
-                        warehouse: $warehouse,
-                        bin: null,
-                        reason: $adjustmentOut,
-                        user: $user,
-                        quantity: $requiredOut,
-                        referenceType: 'INVENTORY_COUNT',
-                        referenceId: $count->getId(),
-                        notes: sprintf('Corrección por reconteo %s (1er: %d, 2do: %d)', $count->getFolio(), $firstCounted, $recounted),
-                        forceAdjustment: true,
-                    );
                 }
             } else {
                 // correction = 0 in recount: record verification entry
                 $paca = $detail->getPaca();
                 $warehouse = $count->getWarehouse();
+                $affectedPacas[$paca->getId()] = $paca;
+            }
+        }
+
+        $this->em->flush();
+
+        foreach ($affectedPacas as $paca) {
+            $this->inventoryManager->updateCachedStock($paca);
+        }
+
+        foreach ($count->getDetails() as $detail) {
+            if ($detail->getStatus() !== 'RECOUNTED') {
+                continue;
+            }
+
+            $paca = $detail->getPaca();
+            $warehouse = $count->getWarehouse();
+            $firstCounted = $detail->getFirstCountedQty();
+            $recounted = $detail->getCountedQty();
+
+            if ($firstCounted === null || $recounted === null) {
+                continue;
+            }
+
+            $correction = $recounted - $firstCounted;
+
+            if ($correction > 0 && $adjustmentIn !== null) {
+                $this->recordCountMovement(
+                    paca: $paca,
+                    warehouse: $warehouse,
+                    reason: $adjustmentIn,
+                    user: $user,
+                    quantityIn: abs($correction),
+                    quantityOut: 0,
+                    referenceId: $count->getId(),
+                    notes: sprintf('Corrección por reconteo %s (1er: %d, 2do: %d)', $count->getFolio(), $firstCounted, $recounted),
+                );
+            } elseif ($correction < 0 && $adjustmentOut !== null) {
+                $actualOut = min(abs($correction), max(0, $firstCounted - $recounted));
+                $this->recordCountMovement(
+                    paca: $paca,
+                    warehouse: $warehouse,
+                    reason: $adjustmentOut,
+                    user: $user,
+                    quantityIn: 0,
+                    quantityOut: $actualOut,
+                    referenceId: $count->getId(),
+                    notes: sprintf('Corrección por reconteo %s (1er: %d, 2do: %d)', $count->getFolio(), $firstCounted, $recounted),
+                );
+            } else {
                 $verifyReason = $adjustmentIn ?? $this->em->getRepository(InventoryReason::class)->findOneBy([]);
                 if ($verifyReason !== null) {
-                    $mov = new InventoryMovement();
-                    $mov->setCompany($warehouse->getCompany());
-                    $mov->setPaca($paca);
-                    $mov->setWarehouse($warehouse);
-                    $mov->setWarehouseBin(null);
-                    $mov->setReason($verifyReason);
-                    $mov->setUser($user);
-                    $mov->setMovementType('CNT');
-                    $mov->setReferenceType('INVENTORY_COUNT');
-                    $mov->setReferenceId($count->getId());
-                    $mov->setQtyIn($detail->getCountedQty() ?? $detail->getSystemQty());
-                    $mov->setQtyOut(0);
-                    $mov->setBalanceAfter($paca->getCachedStock());
-                    $mov->setNotes(sprintf('Constatación reconteo %s', $count->getFolio()));
-                    $this->em->persist($mov);
+                    $this->recordCountVerificationMovement(
+                        paca: $paca,
+                        warehouse: $warehouse,
+                        reason: $verifyReason,
+                        user: $user,
+                        referenceId: $count->getId(),
+                        notes: sprintf('Constatación reconteo %s', $count->getFolio()),
+                    );
                 }
             }
         }
@@ -500,6 +568,292 @@ final readonly class InventoryCountService
         }
 
         return $result;
+    }
+
+    private function recordCountMovement(
+        Paca $paca,
+        Warehouse $warehouse,
+        InventoryReason $reason,
+        User $user,
+        int $quantityIn,
+        int $quantityOut,
+        int $referenceId,
+        string $notes,
+    ): void {
+        $movement = new InventoryMovement();
+        $movement->setCompany($warehouse->getCompany());
+        $movement->setPaca($paca);
+        $movement->setWarehouse($warehouse);
+        $movement->setWarehouseBin(null);
+        $movement->setReason($reason);
+        $movement->setUser($user);
+        $movement->setMovementType($reason->getDirection());
+        $movement->setReferenceType('INVENTORY_COUNT');
+        $movement->setReferenceId($referenceId);
+        $movement->setQtyIn($quantityIn);
+        $movement->setQtyOut($quantityOut);
+        $movement->setBalanceAfter($this->countTrackedUnitsInWarehouse($paca, $warehouse));
+        $movement->setNotes($notes);
+
+        $this->em->persist($movement);
+    }
+
+    private function recordScannedCountMovement(
+        InventoryCountDetail $detail,
+        Warehouse $warehouse,
+        ?InventoryReason $adjustmentIn,
+        ?InventoryReason $adjustmentOut,
+        User $user,
+        int $referenceId,
+        string $notes,
+    ): void {
+        $diff = $detail->getDifference() ?? 0;
+
+        if ($diff > 0 && $adjustmentIn !== null) {
+            $this->recordCountMovement(
+                paca: $detail->getPaca(),
+                warehouse: $warehouse,
+                reason: $adjustmentIn,
+                user: $user,
+                quantityIn: abs($diff),
+                quantityOut: 0,
+                referenceId: $referenceId,
+                notes: $notes,
+            );
+
+            return;
+        }
+
+        if ($diff < 0 && $adjustmentOut !== null) {
+            $this->recordCountMovement(
+                paca: $detail->getPaca(),
+                warehouse: $warehouse,
+                reason: $adjustmentOut,
+                user: $user,
+                quantityIn: 0,
+                quantityOut: abs($diff),
+                referenceId: $referenceId,
+                notes: $notes,
+            );
+
+            return;
+        }
+
+        $verifyReason = $adjustmentIn ?? $adjustmentOut;
+        if ($verifyReason !== null) {
+            $this->recordCountVerificationMovement(
+                paca: $detail->getPaca(),
+                warehouse: $warehouse,
+                reason: $verifyReason,
+                user: $user,
+                referenceId: $referenceId,
+                notes: $notes,
+            );
+        }
+    }
+
+    private function recordCountVerificationMovement(
+        Paca $paca,
+        Warehouse $warehouse,
+        InventoryReason $reason,
+        User $user,
+        int $referenceId,
+        string $notes,
+    ): void {
+        $movement = new InventoryMovement();
+        $movement->setCompany($warehouse->getCompany());
+        $movement->setPaca($paca);
+        $movement->setWarehouse($warehouse);
+        $movement->setWarehouseBin(null);
+        $movement->setReason($reason);
+        $movement->setUser($user);
+        $movement->setMovementType('CNT');
+        $movement->setReferenceType('INVENTORY_COUNT');
+        $movement->setReferenceId($referenceId);
+        $movement->setQtyIn(0);
+        $movement->setQtyOut(0);
+        $movement->setBalanceAfter($this->countTrackedUnitsInWarehouse($paca, $warehouse));
+        $movement->setNotes($notes);
+
+        $this->em->persist($movement);
+    }
+
+    private function countTrackedUnitsInWarehouse(Paca $paca, Warehouse $warehouse): int
+    {
+        return (int) $this->em->createQueryBuilder()
+            ->select('COUNT(u.id)')
+            ->from(PacaUnit::class, 'u')
+            ->where('u.paca = :paca')
+            ->andWhere('u.warehouse = :warehouse')
+            ->andWhere('u.status IN (:statuses)')
+            ->setParameter('paca', $paca)
+            ->setParameter('warehouse', $warehouse)
+            ->setParameter('statuses', [
+                PacaUnit::STATUS_AVAILABLE,
+                PacaUnit::STATUS_RESERVED,
+                PacaUnit::STATUS_PICKED,
+            ])
+            ->getQuery()
+            ->getSingleScalarResult();
+    }
+
+    /**
+     * @param array<mixed> $serials
+     * @return string[]
+     */
+    private function normalizeScannedSerials(array $serials): array
+    {
+        $normalized = [];
+
+        foreach ($serials as $serial) {
+            if (!is_string($serial)) {
+                continue;
+            }
+
+            $value = strtoupper(trim($serial));
+            if ($value === '') {
+                continue;
+            }
+
+            $normalized[$value] = $value;
+        }
+
+        return array_values($normalized);
+    }
+
+    /**
+     * @param string[] $serials
+     */
+    private function assertScannedSerialsBelongToDetail(InventoryCountDetail $detail, Warehouse $warehouse, array $serials): void
+    {
+        if ($serials === []) {
+            return;
+        }
+
+        $units = $this->em->createQueryBuilder()
+            ->select('u')
+            ->from(PacaUnit::class, 'u')
+            ->where('u.serial IN (:serials)')
+            ->setParameter('serials', $serials)
+            ->getQuery()
+            ->getResult();
+
+        $map = [];
+        foreach ($units as $unit) {
+            if ($unit instanceof PacaUnit) {
+                $map[strtoupper($unit->getSerial())] = $unit;
+            }
+        }
+
+        foreach ($serials as $serial) {
+            $unit = $map[$serial] ?? null;
+            if (!$unit instanceof PacaUnit) {
+                throw new NotFoundHttpException(sprintf('La unidad escaneada "%s" no existe.', $serial));
+            }
+
+            if ($unit->getPaca()->getId() !== $detail->getPaca()->getId()) {
+                throw new BadRequestHttpException(sprintf('La unidad "%s" no pertenece a la paca %s.', $serial, $detail->getPaca()->getCode()));
+            }
+
+            if ($unit->getWarehouse()->getId() !== $warehouse->getId()) {
+                throw new BadRequestHttpException(sprintf('La unidad "%s" no pertenece a la bodega %s.', $serial, $warehouse->getName()));
+            }
+        }
+    }
+
+    /**
+     * @return array{warnings: string[]}
+     */
+    private function applyScannedSerialAdjustment(InventoryCountDetail $detail, Warehouse $warehouse): array
+    {
+        $serials = $detail->getScannedSerials() ?? [];
+        if ($serials === []) {
+            return ['warnings' => []];
+        }
+
+        $paca = $detail->getPaca();
+        $warnings = [];
+        $units = $this->em->createQueryBuilder()
+            ->select('u')
+            ->from(PacaUnit::class, 'u')
+            ->where('u.paca = :paca')
+            ->andWhere('u.warehouse = :warehouse')
+            ->setParameter('paca', $paca)
+            ->setParameter('warehouse', $warehouse)
+            ->orderBy('u.id', 'ASC')
+            ->getQuery()
+            ->getResult();
+
+        $unitsBySerial = [];
+        foreach ($units as $unit) {
+            if ($unit instanceof PacaUnit) {
+                $unitsBySerial[strtoupper($unit->getSerial())] = $unit;
+            }
+        }
+
+        $diff = $detail->getDifference() ?? 0;
+
+        if ($diff > 0) {
+            $existingCount = $this->em->getRepository(PacaUnit::class)->count(['paca' => $paca]);
+            for ($i = 0; $i < abs($diff); $i++) {
+                $unit = new PacaUnit();
+                $unit->setSerial(sprintf('%s-%04d', $paca->getCode(), $existingCount + $i + 1));
+                $unit->setPaca($paca);
+                $unit->setWarehouse($warehouse);
+                $this->em->persist($unit);
+            }
+
+            return ['warnings' => $warnings];
+        }
+
+        if ($diff < 0) {
+            $scannedLookup = array_fill_keys($serials, true);
+            $unitsToMark = [];
+
+            foreach ($units as $unit) {
+                if (!$unit instanceof PacaUnit) {
+                    continue;
+                }
+
+                $serial = strtoupper($unit->getSerial());
+                if (isset($scannedLookup[$serial])) {
+                    continue;
+                }
+
+                if ($unit->getStatus() === PacaUnit::STATUS_AVAILABLE) {
+                    $unitsToMark[] = $unit;
+                }
+
+                if (count($unitsToMark) >= abs($diff)) {
+                    break;
+                }
+            }
+
+            foreach ($unitsToMark as $unit) {
+                $unit->setStatus(PacaUnit::STATUS_DAMAGED);
+            }
+
+            if (count($unitsToMark) < abs($diff)) {
+                $warnings[] = sprintf(
+                    '%s: se requería ajustar -%d pero solo se pudieron marcar %d unidades disponibles no escaneadas en %s.',
+                    $paca->getCode(),
+                    abs($diff),
+                    count($unitsToMark),
+                    $warehouse->getName(),
+                );
+            }
+
+            return ['warnings' => $warnings];
+        }
+
+        foreach ($serials as $serial) {
+            $unit = $unitsBySerial[$serial] ?? null;
+            if (!$unit instanceof PacaUnit) {
+                $warnings[] = sprintf('La unidad escaneada %s no fue encontrada para actualizarse como disponible.', $serial);
+            }
+        }
+
+        return ['warnings' => $warnings];
     }
 
     public function delete(int $id): void
