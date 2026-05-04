@@ -20,6 +20,7 @@ use App\Repository\PacaRepository;
 use App\Repository\PacaUnitRepository;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\HttpKernel\Exception\ConflictHttpException;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 
 final readonly class PacaService
@@ -135,7 +136,37 @@ final readonly class PacaService
     public function delete(int $id): void
     {
         $p = $this->pacaRepository->find($id);
-        if ($p === null) throw new NotFoundHttpException(sprintf('Paca con ID %d no encontrada.', $id));
+        if ($p === null) {
+            throw new NotFoundHttpException(sprintf('Paca con ID %d no encontrada.', $id));
+        }
+
+        // Block if referenced by sales order items (paca_id RESTRICT)
+        $soCount = (int) $this->em->createQuery(
+            'SELECT COUNT(i.id) FROM App\Entity\SalesOrderItem i WHERE i.paca = :paca'
+        )->setParameter('paca', $p)->getSingleScalarResult();
+
+        if ($soCount > 0) {
+            throw new ConflictHttpException(
+                "No se puede eliminar la paca '{$p->getCode()}': tiene {$soCount} ítem(s) en órdenes de venta."
+            );
+        }
+
+        // Block if any unit is referenced by a shipment order item (paca_unit_id RESTRICT)
+        $shipCount = (int) $this->em->createQuery(
+            'SELECT COUNT(s.id) FROM App\Entity\ShipmentOrderItem s WHERE s.pacaUnit IN (SELECT u.id FROM App\Entity\PacaUnit u WHERE u.paca = :paca)'
+        )->setParameter('paca', $p)->getSingleScalarResult();
+
+        if ($shipCount > 0) {
+            throw new ConflictHttpException(
+                "No se puede eliminar la paca '{$p->getCode()}': tiene unidades en {$shipCount} ítem(s) de envío."
+            );
+        }
+
+        // Delete all units (and their inventory movements via CASCADE in DB) first
+        $this->em->createQuery(
+            'DELETE FROM App\Entity\PacaUnit u WHERE u.paca = :paca'
+        )->setParameter('paca', $p)->execute();
+
         $this->em->remove($p);
         $this->em->flush();
     }

@@ -151,8 +151,24 @@ final readonly class PacaExcelService
             throw new NotFoundHttpException('Archivo de importación no encontrado.');
         }
 
-        $log->setStatus(PacaImportLog::STATUS_PROCESSING);
-        $this->em->flush();
+        // Mark as processing using direct SQL so it commits immediately without opening
+        // a long-lived Doctrine transaction that would block concurrent /status polls.
+        $conn = $this->em->getConnection();
+        $conn->executeStatement(
+            "UPDATE paca_import_log SET status = 'processing' WHERE id = :id",
+            ['id' => $log->getId()],
+        );
+        // Detach the log entity so Doctrine never touches it again; all progress
+        // updates go through flushProgress() which uses direct SQL.
+        $this->em->detach($log);
+
+        $created = 0;
+        $updated = 0;
+        $errors = [];
+        $processed = 0;
+
+        // Keep warehouse as a plain reference; re-fetch if EM gets cleared mid-loop.
+        $warehouseId2 = $warehouse->getId();
 
         try {
             $spreadsheet = IOFactory::load($filePath);
@@ -173,24 +189,17 @@ final readonly class PacaExcelService
 
             $catalogMap = $this->buildCatalogLookups();
 
-            // Build existing names set for uniqueness validation
             $existingNames = [];
             foreach ($this->pacaRepository->findAll() as $existing) {
                 $existingNames[mb_strtolower($existing->getName())] = $existing->getCode();
             }
             $namesInFile = [];
 
-            $created = 0;
-            $updated = 0;
-            $errors = [];
-            $processed = 0;
-
             foreach ($rows as $rowNum => $row) {
                 $code = trim((string) ($row[$colMap['código'] ?? $colMap['codigo'] ?? ''] ?? ''));
                 if ($code === '') {
                     $processed++;
-                    $log->setProcessedRows($processed);
-                    $this->em->flush();
+                    $this->flushProgress($log->getId(), $processed, $created, $updated, $errors);
                     continue;
                 }
 
@@ -198,10 +207,7 @@ final readonly class PacaExcelService
                 if ($name === '') {
                     $errors[] = "Fila {$rowNum}: El nombre es obligatorio para el código '{$code}'.";
                     $processed++;
-                    $log->setProcessedRows($processed);
-                    $log->setErrors($errors);
-                    $log->setErrorCount(\count($errors));
-                    $this->em->flush();
+                    $this->flushProgress($log->getId(), $processed, $created, $updated, $errors);
                     continue;
                 }
 
@@ -209,26 +215,23 @@ final readonly class PacaExcelService
                 if (isset($namesInFile[$nameLower]) && $namesInFile[$nameLower] !== $code) {
                     $errors[] = "Fila {$rowNum}: El nombre '{$name}' está duplicado en el archivo (ya en código '{$namesInFile[$nameLower]}').";
                     $processed++;
-                    $log->setProcessedRows($processed);
-                    $log->setErrors($errors);
-                    $log->setErrorCount(\count($errors));
-                    $this->em->flush();
+                    $this->flushProgress($log->getId(), $processed, $created, $updated, $errors);
                     continue;
                 }
 
                 if (isset($existingNames[$nameLower]) && $existingNames[$nameLower] !== $code) {
                     $errors[] = "Fila {$rowNum}: El nombre '{$name}' ya existe en la BD (código '{$existingNames[$nameLower]}').";
                     $processed++;
-                    $log->setProcessedRows($processed);
-                    $log->setErrors($errors);
-                    $log->setErrorCount(\count($errors));
-                    $this->em->flush();
+                    $this->flushProgress($log->getId(), $processed, $created, $updated, $errors);
                     continue;
                 }
 
                 $namesInFile[$nameLower] = $code;
 
                 try {
+                    // Re-fetch warehouse after any EM clear so it stays managed.
+                    $warehouse = $this->warehouseRepository->find($warehouseId2);
+
                     $existingPaca = $this->pacaRepository->findOneBy(['code' => $code]);
                     $isNew = $existingPaca === null;
                     $paca = $existingPaca ?? new Paca();
@@ -239,35 +242,33 @@ final readonly class PacaExcelService
 
                     if ($isNew) {
                         $this->em->persist($paca);
+                    }
+
+                    $this->syncUnitsForImport($paca, $warehouse, $isNew, $replaceUnits);
+
+                    // flush commits this row; Doctrine manages its own transaction here.
+                    $this->em->flush();
+
+                    // Only count after a successful flush.
+                    if ($isNew) {
                         $created++;
                         $existingNames[$nameLower] = $code;
                     } else {
                         $updated++;
                     }
-
-                    $this->syncUnitsForImport($paca, $warehouse, $isNew, $replaceUnits);
                 } catch (\Throwable $e) {
                     $errors[] = "Fila {$rowNum} (código '{$code}'): " . $e->getMessage();
+                    // Clear only the pending unit-of-work; detached entities (log) stay gone.
+                    $this->em->clear();
                 }
 
                 $processed++;
-                $log->setProcessedRows($processed);
-                $log->setCreatedCount($created);
-                $log->setUpdatedCount($updated);
-                $log->setErrors($errors);
-                $log->setErrorCount(\count($errors));
-                $this->em->flush();
+                $this->flushProgress($log->getId(), $processed, $created, $updated, $errors);
             }
 
-            $log->setStatus(PacaImportLog::STATUS_COMPLETED);
-            $log->setCompletedAt(new \DateTimeImmutable());
-            $this->em->flush();
+            $this->flushProgress($log->getId(), $processed, $created, $updated, $errors, PacaImportLog::STATUS_COMPLETED, new \DateTimeImmutable());
         } catch (\Throwable $e) {
-            $log->setStatus(PacaImportLog::STATUS_FAILED);
-            $log->addError($e->getMessage());
-            $log->setCompletedAt(new \DateTimeImmutable());
-            $this->em->flush();
-
+            $this->flushProgress($log->getId(), $processed, $created, $updated, $errors, PacaImportLog::STATUS_FAILED, new \DateTimeImmutable(), $e->getMessage());
             throw $e;
         } finally {
             if (file_exists($filePath)) {
@@ -275,7 +276,53 @@ final readonly class PacaExcelService
             }
         }
 
-        return $this->formatLogResponse($log);
+        // Re-fetch log fresh from DB (flushProgress wrote via raw SQL, ORM object is detached).
+        $freshLog = $this->importLogRepository->find($importId);
+        return $this->formatLogResponse($freshLog ?? $log);
+    }
+
+    /**
+     * Writes progress directly via SQL so concurrent /status polls see it immediately,
+     * bypassing Doctrine's identity map and any open ORM transaction.
+     *
+     * @param string[] $errors
+     */
+    private function flushProgress(
+        int $logId,
+        int $processed,
+        int $created,
+        int $updated,
+        array $errors,
+        string $status = PacaImportLog::STATUS_PROCESSING,
+        ?\DateTimeImmutable $completedAt = null,
+        ?string $extraError = null,
+    ): void {
+        if ($extraError !== null) {
+            $errors[] = $extraError;
+        }
+
+        $conn = $this->em->getConnection();
+        $conn->executeStatement(
+            'UPDATE paca_import_log
+             SET status = :status,
+                 processed_rows = :processed,
+                 created_count  = :created,
+                 updated_count  = :updated,
+                 error_count    = :errorCount,
+                 errors         = :errors,
+                 completed_at   = :completedAt
+             WHERE id = :id',
+            [
+                'id'          => $logId,
+                'status'      => $status,
+                'processed'   => $processed,
+                'created'     => $created,
+                'updated'     => $updated,
+                'errorCount'  => \count($errors),
+                'errors'      => json_encode($errors, \JSON_UNESCAPED_UNICODE),
+                'completedAt' => $completedAt?->format('Y-m-d H:i:s'),
+            ],
+        );
     }
 
     private function syncUnitsForImport(Paca $paca, Warehouse $warehouse, bool $isNew, bool $replaceUnits = false): void
@@ -383,17 +430,17 @@ final readonly class PacaExcelService
 
         $purchasePrice = $this->getCellValue($row, $colMap, 'precio compra');
         if ($purchasePrice !== null && $purchasePrice !== '') {
-            $paca->setPurchasePrice((string) (float) $purchasePrice);
+            $paca->setPurchasePrice((string) (float) str_replace(',', '.', $purchasePrice));
         }
 
         $sellingPrice = $this->getCellValue($row, $colMap, 'precio venta');
         if ($sellingPrice !== null && $sellingPrice !== '') {
-            $paca->setSellingPrice((string) (float) $sellingPrice);
+            $paca->setSellingPrice((string) (float) str_replace(',', '.', $sellingPrice));
         }
 
         $stock = $this->getCellValue($row, $colMap, 'stock');
         if ($stock !== null && $stock !== '') {
-            $paca->setStock((int) $stock);
+            $paca->setStock((int) str_replace(',', '.', $stock));
         }
 
         $pieces = $this->getCellValue($row, $colMap, 'piezas');
