@@ -160,6 +160,53 @@ fastcgi_read_timeout
 proxy_read_timeout
 ```
 
+### Ajuste de timeout de FastCGI en Nginx
+
+En este proyecto el ajuste final que resolvió la carga de productos en producción se hizo en:
+
+```text
+/etc/nginx/conf.d/apioms.conf
+```
+
+Dentro del bloque:
+
+```nginx
+location ~ ^/index\.php(/|$) {
+    fastcgi_pass unix:/run/php-fpm/www.sock;
+    fastcgi_split_path_info ^(.+\.php)(/.*)$;
+    include fastcgi_params;
+    fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;
+    fastcgi_param DOCUMENT_ROOT $realpath_root;
+    fastcgi_param APP_ENV prod;
+    fastcgi_connect_timeout 300s;
+    fastcgi_send_timeout 300s;
+    fastcgi_read_timeout 300s;
+    internal;
+}
+```
+
+Este cambio se aplicó porque la importación podía tardar más que el timeout efectivo de Nginx y el servidor respondía con:
+
+```text
+504 Gateway Time-out
+```
+
+Después del ajuste, validar con:
+
+```bash
+sudo nginx -t
+sudo systemctl restart nginx
+sudo nginx -T | grep -A 15 'location ~ ^/index\.php'
+```
+
+Resultado esperado:
+
+- Nginx valida configuración sin errores
+- el bloque `index.php` muestra `fastcgi_connect_timeout 300s`
+- el bloque `index.php` muestra `fastcgi_send_timeout 300s`
+- el bloque `index.php` muestra `fastcgi_read_timeout 300s`
+- la carga larga de productos deja de responder con `504`
+
 ### Implicaciones operativas y de costo
 
 - **Mayor uso de CPU por request**
@@ -169,6 +216,7 @@ proxy_read_timeout
   - mientras una importación sigue corriendo, ese worker no atiende otras peticiones
 
 - **Posible necesidad de más recursos**
+  - si varias importaciones siguen creciendo, puede ser necesario subir CPU/RAM o aumentar capacidad de la instancia
   - si varios usuarios importan archivos pesados al mismo tiempo, puede ser necesario subir CPU/RAM o aumentar capacidad de la instancia
 
 - **No aumenta el costo por sí solo**
