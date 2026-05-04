@@ -247,6 +247,299 @@ composer install
 php bin/console cache:clear
 ```
 
+## Migración incremental del flujo de pedidos, inventario y kardex
+
+### Checklist de implementación
+
+- [x] Incremento 1: preparar el dominio con nuevos estatus mínimos sin cambiar todavía la semántica operativa actual.
+- [x] Incremento 2: mover la reserva fuera de la creación del pedido a un paso explícito de negocio.
+- [x] Incremento 3: registrar movimientos lógicos de reserva y liberación sin afectar stock físico.
+- [x] Incremento 4: endurecer validación por bodega y prevenir doble salida física por unidad/pedido.
+- [x] Incremento 5: separar cancelación de devolución y habilitar devolución explícita.
+- [x] Incremento 6: normalizar cache de stock y mantener consistencia entre unidades, kardex y respuestas API.
+- [x] Incremento 7: habilitar devolución parcial explícita con selección de unidades y reconciliación de estatus.
+- [x] Incremento 8: conciliar devoluciones explícitas con `paymentStatus` y cerrar operación de estatus de pago.
+
+### Objetivo de la migración incremental
+
+La ruta adoptada no reescribe el módulo completo. Se conserva la arquitectura actual basada en `SalesOrder`, `ShipmentOrder`, `PacaUnit` e `InventoryMovement`, y se harán ajustes graduales para alinear el backend con el modelo operativo deseado.
+
+### Incremento 1: estatus nuevos incorporados al dominio
+
+En este incremento se agregaron nuevos estatus al dominio para preparar los siguientes pasos, pero todavía no se cambió el flujo funcional existente de creación, reserva, surtido, envío o entrega.
+
+#### Estatus de pedido (`SalesOrder`)
+
+- `PENDING`
+  - pedido creado y pendiente de procesamiento.
+  - sigue siendo el estatus inicial actual.
+- `CONFIRMED`
+  - pedido confirmado comercialmente.
+- `RESERVED`
+  - nuevo estatus preparado para representar reserva explícita de inventario.
+  - en este incremento todavía no se activa automáticamente en el flujo actual.
+- `PREPARING`
+  - pedido en preparación logística.
+- `SHIPPED`
+  - pedido con salida física registrada.
+- `DELIVERED`
+  - pedido entregado.
+- `CANCELLED`
+  - pedido cancelado.
+- `RETURNED`
+  - devolución total del pedido.
+- `PARTIALLY_RETURNED`
+  - nuevo estatus preparado para devoluciones parciales.
+  - en este incremento todavía no se activa funcionalmente.
+
+#### Estatus de unidad (`PacaUnit`)
+
+- `AVAILABLE`
+  - unidad disponible para reserva/venta.
+- `RESERVED`
+  - unidad apartada para un pedido.
+- `PICKED`
+  - estatus legado actualmente usado por el backend en despacho.
+- `PICKING`
+  - nuevo estatus preparado como equivalente semántico futuro para preparación logística.
+  - en este incremento no sustituye todavía a `PICKED`.
+- `DISPATCHED`
+  - estatus legado actualmente usado por el backend cuando la unidad ya salió operativamente del almacén.
+- `SHIPPED`
+  - nuevo estatus preparado para representar salida física de forma más explícita.
+  - en este incremento no sustituye todavía a `DISPATCHED`.
+- `SOLD`
+  - unidad vendida.
+- `DELIVERED`
+  - nuevo estatus preparado para reflejar entrega final a cliente.
+  - en este incremento no se usa todavía en transiciones activas.
+- `RETURNED`
+  - unidad devuelta.
+- `DAMAGED`
+  - unidad dañada.
+- `ADJUSTED_LOSS`
+  - nuevo estatus preparado para pérdidas por ajuste físico.
+- `CANCELLED`
+  - nuevo estatus preparado para invalidación operativa de unidad.
+- `IN_TRANSIT`
+  - nuevo estatus preparado para traspasos o movimientos en tránsito.
+
+### Compatibilidad actual
+
+Durante el incremento 1, el backend mantiene comportamiento actual:
+
+- la creación de `SalesOrder` sigue naciendo en `PENDING`
+- el flujo actual de despacho sigue usando `PICKED` y `DISPATCHED`
+- `RESERVED` y `PARTIALLY_RETURNED` quedan disponibles a nivel dominio pero aún no forman parte de todas las transiciones operativas
+- `PICKING`, `SHIPPED`, `DELIVERED`, `ADJUSTED_LOSS`, `CANCELLED` e `IN_TRANSIT` en `PacaUnit` quedan preparados para incrementos siguientes
+
+### Consideraciones para frontend en incremento 1
+
+El frontend no debe asumir todavía que los nuevos estatus ya aparecerán en todas las respuestas operativas. En este incremento el objetivo es preparar contrato de dominio y documentación para los cambios siguientes.
+
+Implicaciones inmediatas:
+
+ - el frontend debe tolerar que en respuestas de pedido pueda aparecer en el futuro `RESERVED` y `PARTIALLY_RETURNED`
+ - el frontend debe evitar hardcodear listas cerradas de estatus únicamente con los valores anteriores
+ - el frontend que muestre estatus de unidad debe quedar listo para tolerar en el futuro `PICKING`, `SHIPPED`, `DELIVERED`, `ADJUSTED_LOSS`, `CANCELLED` e `IN_TRANSIT`
+ - en este incremento no se requiere cambio visual obligatorio si el frontend ya renderiza etiquetas de estatus de manera dinámica
+
+### Incremento 2: reserva explícita fuera de la creación del pedido
+
+A partir de este incremento, el backend separa la creación del pedido del acto de reservar inventario.
+
+#### Nuevo comportamiento backend
+
+- `POST /api/pedidos/sales-orders`
+  - crea el pedido y sus líneas
+  - deja el pedido en `PENDING`
+  - no asigna unidades
+  - no reserva inventario en este paso
+
+- `POST /api/pedidos/sales-orders/{id}/reserve`
+  - ejecuta la reserva explícita de inventario
+  - asigna unidades al pedido
+  - cambia el pedido a `RESERVED`
+  - actualmente usa la semántica disponible del backend existente, todavía sin validación explícita por bodega por línea
+
+- `POST /api/despacho/shipments`
+  - ahora espera que el pedido ya esté en `RESERVED`, `PREPARING` o `SHIPPED`
+  - si el pedido está en `RESERVED`, el despacho lo mueve a `PREPARING`
+
+#### Compatibilidad operativa
+
+Este incremento cambia el flujo funcional de pedidos:
+
+- crear pedido ya no aparta inventario
+- la reserva pasa a ser un paso explícito
+- si un cliente frontend intenta despachar un pedido recién creado sin reservar, backend debe rechazarlo
+
+#### Consideraciones para frontend en incremento 2
+
+Frontend debe ajustar el flujo de negocio de esta forma:
+
+- crear pedido con `POST /api/pedidos/sales-orders`
+- conservar el `id` del pedido creado
+- si el flujo requiere apartar inventario, llamar inmediatamente después a `POST /api/pedidos/sales-orders/{id}/reserve`
+- solo después de una reserva exitosa permitir acciones de despacho
+
+Implicaciones técnicas:
+
+ - no asumir que crear pedido equivale a reservar inventario
+ - no asumir que un pedido recién creado ya tiene unidades asignadas
+ - si la UI muestra detalle de unidades por item, esa colección puede venir vacía inmediatamente después del create
+
+#### Compatibilidad actual
+
+ - la reserva sigue cambiando unidades a `RESERVED`
+ - la liberación sigue devolviendo unidades a `AVAILABLE`
+ - la salida física real sigue registrándose con `SALE` en despacho
+ - este incremento agrega auditabilidad, no cambia todavía validación por bodega ni endurece doble salida física
+
+### Incremento 4: endurecimiento por bodega y prevención de doble salida física
+
+En este incremento se endureció el módulo de despacho para bloquear escenarios inconsistentes antes de registrar salida física real.
+
+#### Nuevo comportamiento backend
+
+- un pedido no puede generar un nuevo envío activo si ya tiene otro envío en estado `PENDING`, `PICKING`, `PACKED` o `SHIPPED`
+- al crear un envío, backend valida que las unidades reservadas del pedido pertenezcan a una sola bodega compatible con el envío solicitado
+- si el pedido está en `RESERVED` pero no tiene unidades asignadas, backend rechaza la creación de envío
+- al escanear una unidad, backend valida que la unidad pertenezca a la misma bodega del envío
+- al enviar físicamente, backend rechaza envíos sin unidades escaneadas
+- al enviar físicamente, backend exige que todas las unidades del envío sigan en `PICKED`
+- al enviar físicamente, backend valida otra vez que cada unidad pertenezca a la bodega del envío antes de registrar `SALE`
+
+#### Objetivo operativo
+
+La intención de este incremento es evitar dos clases de error operativo:
+
+- surtir o despachar desde una bodega distinta a la que realmente contiene las unidades reservadas
+- registrar doble salida física por rehacer envíos activos o intentar despachar unidades fuera del estado esperado
+
+#### Consideraciones para frontend en incremento 4
+
+Frontend debe asumir que backend ahora es más estricto con el flujo de despacho.
+
+- no intentar crear múltiples envíos activos para el mismo pedido
+- no asumir que cualquier bodega seleccionada servirá para un pedido reservado
+- si backend rechaza creación de envío por bodega inconsistente, la UI debe mostrar el mensaje y pedir corregir la selección
+- no habilitar la acción de enviar si el envío todavía no tiene unidades escaneadas
+- si una unidad reservada pertenece a otra bodega, el escaneo debe tratarse como error operativo y no como warning ignorable
+
+### Incremento 6: normalización de cache de stock y consistencia de respuestas
+
+En este incremento se normalizó la semántica de `cachedStock` para que represente el mismo universo que las respuestas API de stock y los conteos físicos sustentados por `PacaUnit`.
+
+#### Nuevo comportamiento backend
+
+- `cachedStock` ahora queda alineado con el conteo de unidades rastreables del backend
+- el universo rastreable usado por backend queda normalizado a unidades en `AVAILABLE`, `RESERVED` y `PICKED`
+- `PacaResponse.stock`, `trackedStock` y `stockByWarehouse.total` ahora usan esa misma definición
+- la devolución explícita ya no incrementa artificialmente `cachedStock`
+- la recepción de órdenes de compra recalcula `cachedStock` al final de materializar unidades
+- los movimientos manuales de inventario quedan bloqueados para evitar desincronizar kardex contra unidades reales
+
+#### Objetivo operativo
+
+La intención de este incremento es eliminar escenarios donde:
+
+- el kardex mostraba un saldo distinto al stock sustentado por unidades reales
+- el `cachedStock` de una paca no coincidía con lo que devolvía la API en listados o detalle
+- una devolución o ajuste parcial alteraba saldo sin respaldo en `PacaUnit`
+
+#### Consideraciones para frontend en incremento 6
+
+Frontend debe asumir que el stock expuesto por backend ahora es más estricto y consistente.
+
+- `stock` y `stockByWarehouse.total` ya no deben interpretarse como “cualquier unidad no vendida”, sino como stock rastreable vigente
+- una unidad en `RETURNED`, `DISPATCHED`, `SOLD` o `DAMAGED` ya no debe contarse como stock disponible/rastreable en UI
+- si existía una UI para crear movimientos manuales de inventario, debe deshabilitarse o esconderse
+- para ajustes reales de inventario, frontend debe canalizar al usuario a recepción, despacho, devolución explícita o conteo físico
+
+#### Compatibilidad actual
+
+- el backend sigue conservando el endpoint de consulta de kardex
+- el endpoint de creación manual de movimientos ahora rechaza operaciones por consistencia operativa
+- el flujo de reserva y liberación lógica no cambia stock físico ni `cachedStock`
+- este incremento deja más claro el terreno para un siguiente paso de ajustes unitarios explícitos si se requieren
+
+### Incremento 7: devolución parcial explícita por unidad
+
+En este incremento se habilitó una operación explícita para devolver solo una parte de las unidades ya despachadas o vendidas de un pedido, sin obligar a devolver todo el pedido completo.
+
+#### Nuevo comportamiento backend
+
+- se agregó `POST /api/pedidos/sales-orders/{id}/partial-return`
+- el request recibe una lista de `unitIds` específicas a devolver
+- backend valida que cada unidad pertenezca al pedido y esté en estado retornable (`DISPATCHED` o `SOLD`)
+- las unidades seleccionadas pasan a `RETURNED`
+- se registra el kardex `RETURN` solo por las unidades seleccionadas
+- el pedido pasa a `PARTIALLY_RETURNED` si aún quedan unidades retornables pendientes
+- el pedido pasa a `RETURNED` si con esa operación ya no quedan unidades retornables en el pedido
+- la devolución total existente sigue funcionando y ahora también acepta pedidos que ya estaban en `PARTIALLY_RETURNED`
+
+#### Objetivo operativo
+
+La intención de este incremento es separar estos dos casos:
+
+- devolver todo el pedido en una sola operación
+- devolver solo algunas unidades específicas sin cerrar todavía toda la devolución del pedido
+
+#### Consideraciones para frontend en incremento 7
+
+Frontend debe distinguir claramente entre devolución total y devolución parcial.
+
+- para devolución total, seguir usando `POST /api/pedidos/sales-orders/{id}/return`
+- para devolución parcial, usar `POST /api/pedidos/sales-orders/{id}/partial-return`
+- la UI debe permitir seleccionar unidades concretas del pedido para devolver
+- no enviar ids de unidades que no pertenezcan al pedido actual
+- no ofrecer para devolución parcial unidades ya devueltas o que no estén en estado retornable
+- si después de una devolución parcial ya no quedan unidades retornables, frontend debe tolerar que el backend responda el pedido ya en `RETURNED`
+
+#### Compatibilidad actual
+
+- `PARTIALLY_RETURNED` deja de ser solo un estatus preparado y pasa a formar parte activa del flujo operativo
+- el endpoint de cambio genérico de status sigue sin permitir forzar `RETURNED` ni `PARTIALLY_RETURNED`
+- el detalle del pedido sigue exponiendo las unidades por línea, por lo que frontend puede reutilizar esa información para selección
+- este incremento deja lista la base para soportar después reglas más finas de reembolso o devolución por motivo
+
+### Incremento 8: conciliación de devoluciones con estado de pago
+
+En este incremento se cerró la brecha entre la devolución física del pedido y su semántica financiera mínima, aprovechando el `paymentStatus` ya existente en el dominio.
+
+#### Nuevo comportamiento backend
+
+- la devolución total explícita ahora ajusta `paymentStatus` cuando corresponde
+- si un pedido estaba `PAID` o `PARTIAL` y termina en `RETURNED`, backend lo mueve a `REFUNDED`
+- si un pedido estaba `PAID` y se registra una devolución parcial, backend lo mueve a `PARTIAL`
+- se implementó el método de servicio `changePaymentStatus()` que ya estaba expuesto por controller
+- el endpoint `POST /api/pedidos/sales-orders/{id}/payment-status` sigue permitiendo cambios manuales operativos a `PENDING`, `PARTIAL` y `PAID`
+- backend bloquea asignar manualmente `REFUNDED` desde ese endpoint; ese estado queda reservado para devoluciones explícitas
+
+#### Objetivo operativo
+
+La intención de este incremento es evitar que el pedido quede con inventario devuelto pero con semántica financiera incongruente, por ejemplo:
+
+- pedido totalmente devuelto pero aún marcado como `PAID`
+- pedido parcialmente devuelto pero sin reflejar que el estado de pago ya no es íntegramente cobrado
+
+#### Consideraciones para frontend en incremento 8
+
+Frontend debe tratar `paymentStatus` como un eje separado pero ahora parcialmente automatizado por backend.
+
+- después de una devolución total, la UI debe tolerar que `paymentStatus` cambie a `REFUNDED`
+- después de una devolución parcial de un pedido previamente `PAID`, la UI debe tolerar que `paymentStatus` cambie a `PARTIAL`
+- la UI no debe ofrecer `REFUNDED` como opción manual en formularios de cambio de estado de pago
+- si existe selector manual de `paymentStatus`, limitarlo a `PENDING`, `PARTIAL` y `PAID`
+- para mostrar resumen del pedido, combinar visualmente `status` y `paymentStatus`, porque ya no evolucionan de manera totalmente independiente
+
+#### Compatibilidad actual
+
+- este incremento no implementa todavía cálculo monetario fino de cuánto se reembolsó
+- `REFUNDED` se usa como conciliación operativa mínima, no como ledger financiero detallado
+- la base queda lista para un siguiente paso con montos reembolsados o motivos de devolución/reembolso más específicos
+
 ## Estructura del proyecto
 
 ```

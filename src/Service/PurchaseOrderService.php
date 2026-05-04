@@ -230,6 +230,8 @@ final readonly class PurchaseOrderService
         $this->em->beginTransaction();
 
         try {
+            $affectedPacas = [];
+            $nextSerialNumbers = [];
             $itemsById = [];
             foreach ($po->getItems() as $item) {
                 $itemsById[$item->getId()] = $item;
@@ -282,12 +284,12 @@ final readonly class PurchaseOrderService
                             notes: sprintf('Recepción de OC %s - %s', $po->getFolio(), $item->getDescription()),
                         );
 
+                        $affectedPacas[$linkedPaca->getId()] = $linkedPaca;
+
                         // Create individual PacaUnit records
-                        $existingCount = $this->em->getRepository(PacaUnit::class)
-                            ->count(['paca' => $linkedPaca]);
                         for ($i = 0; $i < $newQtyToReceive; $i++) {
                             $unit = new PacaUnit();
-                            $unit->setSerial(sprintf('%s-%04d', $linkedPaca->getCode(), $existingCount + $i + 1));
+                            $unit->setSerial($this->generateNextUnitSerial($linkedPaca, $nextSerialNumbers));
                             $unit->setPaca($linkedPaca);
                             $unit->setWarehouse($warehouse);
                             if ($warehouseBin !== null) {
@@ -316,15 +318,14 @@ final readonly class PurchaseOrderService
                                 notes: sprintf('Recepción de OC %s - %s', $po->getFolio(), $item->getDescription()),
                             );
 
+                            $affectedPacas[$existingPaca->getId()] = $existingPaca;
+
                             // Create individual PacaUnit records
-                            $existingCount = $this->em->getRepository(PacaUnit::class)
-                                ->count(['paca' => $existingPaca]);
                             for ($i = 0; $i < $newQtyToReceive; $i++) {
                                 $unit = new PacaUnit();
-                                $unit->setSerial(sprintf('%s-%04d', $existingPaca->getCode(), $existingCount + $i + 1));
+                                $unit->setSerial($this->generateNextUnitSerial($existingPaca, $nextSerialNumbers));
                                 $unit->setPaca($existingPaca);
                                 $unit->setWarehouse($warehouse);
-                                $unit->setPurchaseOrder($po);
                                 if ($warehouseBin !== null) {
                                     $unit->setWarehouseBin($warehouseBin);
                                 }
@@ -361,12 +362,12 @@ final readonly class PurchaseOrderService
                                 notes: sprintf('Recepción de OC %s - %s', $po->getFolio(), $item->getDescription()),
                             );
 
+                            $affectedPacas[$paca->getId()] = $paca;
+
                             // Create individual PacaUnit records
-                            $existingCount = $this->em->getRepository(PacaUnit::class)
-                                ->count(['paca' => $paca]);
                             for ($i = 0; $i < $newQtyToReceive; $i++) {
                                 $unit = new PacaUnit();
-                                $unit->setSerial(sprintf('%s-%04d', $paca->getCode(), $existingCount + $i + 1));
+                                $unit->setSerial($this->generateNextUnitSerial($paca, $nextSerialNumbers));
                                 $unit->setPaca($paca);
                                 $unit->setWarehouse($warehouse);
                                 $unit->setPurchaseOrder($po);
@@ -378,6 +379,12 @@ final readonly class PurchaseOrderService
                         }
                     }
                 }
+            }
+
+            $this->em->flush();
+
+            foreach ($affectedPacas as $paca) {
+                $this->inventoryManager->updateCachedStock($paca);
             }
 
             // Actualizar estado de la PO
@@ -410,5 +417,44 @@ final readonly class PurchaseOrderService
             $this->em->rollback();
             throw $e;
         }
+    }
+
+    /**
+     * @param array<int, int> $nextSerialNumbers
+     */
+    private function generateNextUnitSerial(Paca $paca, array &$nextSerialNumbers): string
+    {
+        $pacaId = $paca->getId();
+
+        if (!isset($nextSerialNumbers[$pacaId])) {
+            $serials = $this->em->createQuery(
+                'SELECT u.serial FROM App\Entity\PacaUnit u WHERE u.paca = :paca'
+            )
+                ->setParameter('paca', $paca)
+                ->getSingleColumnResult();
+
+            $max = 0;
+            foreach ($serials as $serial) {
+                if (!is_string($serial)) {
+                    continue;
+                }
+
+                $suffix = strrchr($serial, '-');
+                if ($suffix === false) {
+                    continue;
+                }
+
+                $number = (int) ltrim($suffix, '-');
+                if ($number > $max) {
+                    $max = $number;
+                }
+            }
+
+            $nextSerialNumbers[$pacaId] = $max + 1;
+        }
+
+        $nextNumber = $nextSerialNumbers[$pacaId]++;
+
+        return sprintf('%s-%04d', $paca->getCode(), $nextNumber);
     }
 }

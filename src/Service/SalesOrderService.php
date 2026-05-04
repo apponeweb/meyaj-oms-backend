@@ -6,6 +6,8 @@ namespace App\Service;
 
 use App\DTO\Request\ChangeStatusRequest;
 use App\DTO\Request\CreateSalesOrderRequest;
+use App\DTO\Request\PartialReturnSalesOrderRequest;
+use App\DTO\Request\ReturnSalesOrderRequest;
 use App\DTO\Response\SalesOrderDetailResponse;
 use App\DTO\Response\SalesOrderResponse;
 use App\Entity\Branch;
@@ -24,16 +26,18 @@ use App\Pagination\Paginator;
 use App\Repository\SalesOrderRepository;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\HttpKernel\Exception\BadRequestHttpException;
+use Symfony\Component\HttpKernel\Exception\ConflictHttpException;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 
 final readonly class SalesOrderService
 {
     private const ALLOWED_TRANSITIONS = [
         SalesOrder::STATUS_PENDING => [SalesOrder::STATUS_CONFIRMED, SalesOrder::STATUS_CANCELLED],
-        SalesOrder::STATUS_CONFIRMED => [SalesOrder::STATUS_PREPARING, SalesOrder::STATUS_SHIPPED, SalesOrder::STATUS_CANCELLED],
+        SalesOrder::STATUS_CONFIRMED => [SalesOrder::STATUS_RESERVED, SalesOrder::STATUS_PREPARING, SalesOrder::STATUS_CANCELLED],
+        SalesOrder::STATUS_RESERVED => [SalesOrder::STATUS_PREPARING, SalesOrder::STATUS_CANCELLED],
         SalesOrder::STATUS_PREPARING => [SalesOrder::STATUS_SHIPPED, SalesOrder::STATUS_CANCELLED],
-        SalesOrder::STATUS_SHIPPED => [SalesOrder::STATUS_DELIVERED, SalesOrder::STATUS_RETURNED],
-        SalesOrder::STATUS_DELIVERED => [SalesOrder::STATUS_RETURNED],
+        SalesOrder::STATUS_SHIPPED => [SalesOrder::STATUS_DELIVERED],
+        SalesOrder::STATUS_DELIVERED => [],
         SalesOrder::STATUS_CANCELLED => [],
         SalesOrder::STATUS_RETURNED => [],
     ];
@@ -181,9 +185,6 @@ final readonly class SalesOrderService
 
                 $subtotal = bcadd($subtotal, bcmul($unitPrice, (string) $quantity, 2), 2);
                 $totalDiscount = bcadd($totalDiscount, $itemDiscount, 2);
-
-                // Reserve PacaUnits atomically
-                $this->inventoryManager->reserveStock($paca, $so, $item, $quantity);
             }
 
             $total = bcsub($subtotal, $totalDiscount, 2);
@@ -200,82 +201,6 @@ final readonly class SalesOrderService
             $history->setNotes('Pedido creado');
             $so->addStatusHistory($history);
 
-            // Auto-confirm POS sales and immediately dispatch
-            if ($request->channel === SalesOrder::CHANNEL_POS) {
-                $saleReason = $this->requireInventoryReason(InventoryReason::CODE_SALE);
-                $physicalReason = $this->requireInventoryReason(InventoryReason::CODE_PHYSICAL);
-
-                // PENDING → CONFIRMED
-                $so->setStatus(SalesOrder::STATUS_CONFIRMED);
-                $confirmHistory = new SalesOrderStatusHistory();
-                $confirmHistory->setUser($currentUser);
-                $confirmHistory->setFromStatus(SalesOrder::STATUS_PENDING);
-                $confirmHistory->setToStatus(SalesOrder::STATUS_CONFIRMED);
-                $confirmHistory->setNotes('Auto-confirmado (venta POS)');
-                $so->addStatusHistory($confirmHistory);
-
-                // CONFIRMED → SHIPPED (immediate dispatch for POS)
-                $so->setStatus(SalesOrder::STATUS_SHIPPED);
-                $so->setDeliveryStatus(SalesOrder::DELIVERY_SHIPPED);
-                $shippedHistory = new SalesOrderStatusHistory();
-                $shippedHistory->setUser($currentUser);
-                $shippedHistory->setFromStatus(SalesOrder::STATUS_CONFIRMED);
-                $shippedHistory->setToStatus(SalesOrder::STATUS_SHIPPED);
-                $shippedHistory->setNotes('Despacho inmediato (venta POS)');
-                $so->addStatusHistory($shippedHistory);
-
-                // SHIPPED → DELIVERED
-                $so->setStatus(SalesOrder::STATUS_DELIVERED);
-                $so->setDeliveryStatus(SalesOrder::DELIVERY_DELIVERED);
-                $so->setDeliveredAt(new \DateTimeImmutable());
-                $deliveredHistory = new SalesOrderStatusHistory();
-                $deliveredHistory->setUser($currentUser);
-                $deliveredHistory->setFromStatus(SalesOrder::STATUS_SHIPPED);
-                $deliveredHistory->setToStatus(SalesOrder::STATUS_DELIVERED);
-                $deliveredHistory->setNotes('Entrega inmediata (venta POS)');
-                $so->addStatusHistory($deliveredHistory);
-
-                $units = $this->em->getRepository(PacaUnit::class)->findBy([
-                    'salesOrder' => $so,
-                    'status' => PacaUnit::STATUS_RESERVED,
-                ]);
-
-                $grouped = [];
-                foreach ($units as $unit) {
-                    $unit->setStatus(PacaUnit::STATUS_SOLD);
-                    $this->recordStatusTrace(
-                        unit: $unit,
-                        reason: $physicalReason,
-                        user: $currentUser,
-                        referenceType: 'sales_order',
-                        referenceId: $so->getId(),
-                        notes: sprintf('Unidad %s marcada como SOLD en venta POS %s', $unit->getSerial(), $so->getFolio()),
-                    );
-                    $key = $unit->getPaca()->getId() . '-' . $unit->getWarehouse()->getId();
-                    if (!isset($grouped[$key])) {
-                        $grouped[$key] = ['paca' => $unit->getPaca(), 'warehouse' => $unit->getWarehouse(), 'count' => 0];
-                    }
-                    $grouped[$key]['count']++;
-                }
-
-                foreach ($grouped as $group) {
-                    $this->inventoryManager->recordMovement(
-                        paca: $group['paca'],
-                        warehouse: $group['warehouse'],
-                        bin: null,
-                        reason: $saleReason,
-                        user: $currentUser,
-                        quantity: $group['count'],
-                        referenceType: 'sales_order',
-                        referenceId: $so->getId(),
-                        notes: sprintf('Venta POS %s - %s', $so->getFolio(), $group['paca']->getCode()),
-                    );
-                }
-
-                // Mark payment as PAID for POS
-                $so->setPaymentStatus(SalesOrder::PAYMENT_PAID);
-            }
-
             $this->em->flush();
             $this->em->commit();
 
@@ -283,6 +208,92 @@ final readonly class SalesOrderService
         } catch (\Exception $e) {
             $this->em->rollback();
             throw $e;
+        }
+    }
+
+    public function reserve(int $id, User $currentUser): SalesOrderDetailResponse
+    {
+        $so = $this->salesOrderRepository->createQueryBuilder('so')
+            ->leftJoin('so.company', 'c')
+            ->leftJoin('so.customer', 'cu')
+            ->leftJoin('so.user', 'u')
+            ->leftJoin('so.seller', 'se')
+            ->leftJoin('so.items', 'i')
+            ->leftJoin('i.paca', 'p')
+            ->leftJoin('so.statusHistory', 'sh')
+            ->leftJoin('sh.user', 'shu')
+            ->addSelect('c', 'cu', 'u', 'se', 'i', 'p', 'sh', 'shu')
+            ->where('so.id = :id')
+            ->setParameter('id', $id)
+            ->getQuery()
+            ->getOneOrNullResult();
+
+        if ($so === null) {
+            throw new NotFoundHttpException(sprintf('Pedido de venta con ID %d no encontrado.', $id));
+        }
+
+        if (!in_array($so->getStatus(), [SalesOrder::STATUS_PENDING, SalesOrder::STATUS_CONFIRMED], true)) {
+            throw new BadRequestHttpException(
+                sprintf('Solo se puede reservar inventario para pedidos en estado PENDING o CONFIRMED. Estado actual: %s.', $so->getStatus()),
+            );
+        }
+
+        $existingUnits = $this->em->getRepository(PacaUnit::class)->count([
+            'salesOrder' => $so,
+        ]);
+
+        if ($existingUnits > 0) {
+            throw new BadRequestHttpException('El pedido ya tiene unidades asignadas. No se puede reservar nuevamente.');
+        }
+
+        $this->em->beginTransaction();
+
+        try {
+            $fromStatus = $so->getStatus();
+
+            foreach ($so->getItems() as $item) {
+                if ($item->getPaca() === null) {
+                    throw new ConflictHttpException(
+                        sprintf('La línea %d del pedido %s no tiene una paca válida asociada para reservar inventario.', $item->getId(), $so->getFolio()),
+                    );
+                }
+
+                $this->inventoryManager->reserveStock(
+                    $item->getPaca(),
+                    $so,
+                    $item,
+                    $item->getQuantity(),
+                );
+            }
+
+            $so->setStatus(SalesOrder::STATUS_RESERVED);
+
+            $history = new SalesOrderStatusHistory();
+            $history->setUser($currentUser);
+            $history->setFromStatus($fromStatus);
+            $history->setToStatus(SalesOrder::STATUS_RESERVED);
+            $history->setNotes('Inventario reservado explícitamente');
+            $so->addStatusHistory($history);
+
+            $this->em->flush();
+            $this->em->commit();
+
+            $unitsByItem = $this->getUnitsByOrderItems($so);
+
+            return new SalesOrderDetailResponse($so, $unitsByItem);
+        } catch (ConflictHttpException|BadRequestHttpException|NotFoundHttpException $e) {
+            if ($this->em->getConnection()->isTransactionActive()) {
+                $this->em->rollback();
+            }
+            throw $e;
+        } catch (\Throwable $e) {
+            if ($this->em->getConnection()->isTransactionActive()) {
+                $this->em->rollback();
+            }
+            throw new ConflictHttpException(
+                sprintf('No se pudo reservar inventario para el pedido %s. Verifique stock disponible por unidades y consistencia de las pacas asociadas.', $so->getFolio()),
+                previous: $e,
+            );
         }
     }
 
@@ -317,15 +328,27 @@ final readonly class SalesOrderService
             );
         }
 
-        // SHIPPED and DELIVERED must go through the Dispatch module (ShipmentService)
+        if ($newStatus === SalesOrder::STATUS_RESERVED) {
+            throw new BadRequestHttpException(
+                'El estado "RESERVED" solo se puede asignar desde la operación explícita de reserva del pedido.',
+            );
+        }
+
         if ($newStatus === SalesOrder::STATUS_SHIPPED) {
             throw new BadRequestHttpException(
                 'El estado "ENVIADO" solo se puede asignar desde el modulo de Despacho. Crea una Orden de Envio y marca como enviado desde ahi.',
             );
         }
+
         if ($newStatus === SalesOrder::STATUS_DELIVERED) {
             throw new BadRequestHttpException(
                 'El estado "ENTREGADO" solo se puede asignar desde el modulo de Despacho. Marca la Orden de Envio como entregada.',
+            );
+        }
+
+        if ($newStatus === SalesOrder::STATUS_RETURNED || $newStatus === SalesOrder::STATUS_PARTIALLY_RETURNED) {
+            throw new BadRequestHttpException(
+                'Los estados de devolución solo se pueden asignar desde las operaciones explícitas de devolución del pedido.',
             );
         }
 
@@ -334,9 +357,6 @@ final readonly class SalesOrderService
         try {
             $so->setStatus($newStatus);
 
-            $physicalReason = $this->requireInventoryReason(InventoryReason::CODE_PHYSICAL);
-
-            // Status history
             $history = new SalesOrderStatusHistory();
             $history->setUser($currentUser);
             $history->setFromStatus($currentStatus);
@@ -344,177 +364,15 @@ final readonly class SalesOrderService
             $history->setNotes($request->notes);
             $so->addStatusHistory($history);
 
-            // Inventory side-effects (SHIPPED/DELIVERED now handled by ShipmentService)
-            if ($newStatus === SalesOrder::STATUS_SHIPPED) {
-                $saleReason = $this->requireInventoryReason(InventoryReason::CODE_SALE);
-
-                // Get all reserved/picked units for this order, grouped by paca+warehouse
-                $units = $this->em->getRepository(PacaUnit::class)->findBy([
-                    'salesOrder' => $so,
-                ]);
-
-                // Group units by paca and warehouse for batch movement recording
-                $grouped = [];
-                foreach ($units as $unit) {
-                    if (in_array($unit->getStatus(), [PacaUnit::STATUS_RESERVED, PacaUnit::STATUS_PICKED], true)) {
-                        $unit->setStatus(PacaUnit::STATUS_DISPATCHED);
-                        $this->recordStatusTrace(
-                            unit: $unit,
-                            reason: $physicalReason,
-                            user: $currentUser,
-                            referenceType: 'sales_order',
-                            referenceId: $so->getId(),
-                            notes: sprintf('Unidad %s marcada como DISPATCHED en pedido %s', $unit->getSerial(), $so->getFolio()),
-                        );
-                        $key = $unit->getPaca()->getId() . '-' . $unit->getWarehouse()->getId();
-                        if (!isset($grouped[$key])) {
-                            $grouped[$key] = ['paca' => $unit->getPaca(), 'warehouse' => $unit->getWarehouse(), 'count' => 0];
-                        }
-                        $grouped[$key]['count']++;
-                    }
-                }
-
-                // Record one movement per paca-warehouse combination
-                foreach ($grouped as $group) {
-                    $this->inventoryManager->recordMovement(
-                        paca: $group['paca'],
-                        warehouse: $group['warehouse'],
-                        bin: null,
-                        reason: $saleReason,
-                        user: $currentUser,
-                        quantity: $group['count'],
-                        referenceType: 'sales_order',
-                        referenceId: $so->getId(),
-                        notes: sprintf('Venta %s - %s', $so->getFolio(), $group['paca']->getCode()),
-                    );
-                }
-
-                $so->setDeliveryStatus(SalesOrder::DELIVERY_SHIPPED);
-            }
-
-            if ($newStatus === SalesOrder::STATUS_DELIVERED) {
-                $so->setDeliveredAt(new \DateTimeImmutable());
-                $so->setDeliveryStatus(SalesOrder::DELIVERY_DELIVERED);
-
-                // Mark all dispatched units as SOLD
-                $units = $this->em->getRepository(PacaUnit::class)->findBy([
-                    'salesOrder' => $so,
-                    'status' => PacaUnit::STATUS_DISPATCHED,
-                ]);
-                foreach ($units as $unit) {
-                    $unit->setStatus(PacaUnit::STATUS_SOLD);
-                    $this->recordStatusTrace(
-                        unit: $unit,
-                        reason: $physicalReason,
-                        user: $currentUser,
-                        referenceType: 'sales_order',
-                        referenceId: $so->getId(),
-                        notes: sprintf('Unidad %s marcada como SOLD en pedido %s', $unit->getSerial(), $so->getFolio()),
-                    );
-                }
-
-                if ($so->getPaymentStatus() === SalesOrder::PAYMENT_PAID) {
-                    $so->setStatus(SalesOrder::STATUS_DELIVERED);
-                }
-            }
-
             if ($newStatus === SalesOrder::STATUS_CANCELLED) {
-                $returnReason = $this->requireInventoryReason(InventoryReason::CODE_RETURN);
-
-                // Release all reserved/picked units
                 $this->inventoryManager->releaseAllUnitsForOrder($so);
-
-                // If already shipped/delivered, also return stock
-                if ($currentStatus === SalesOrder::STATUS_SHIPPED || $currentStatus === SalesOrder::STATUS_DELIVERED) {
-                    $units = $this->em->getRepository(PacaUnit::class)->findBy([
-                        'salesOrder' => $so,
-                        'status' => PacaUnit::STATUS_DISPATCHED,
-                    ]);
-
-                    $grouped = [];
-                    foreach ($units as $unit) {
-                        $unit->setStatus(PacaUnit::STATUS_RETURNED);
-                        $unit->setSalesOrder(null);
-                        $unit->setSalesOrderItem(null);
-                        $this->recordStatusTrace(
-                            unit: $unit,
-                            reason: $physicalReason,
-                            user: $currentUser,
-                            referenceType: 'sales_order',
-                            referenceId: $so->getId(),
-                            notes: sprintf('Unidad %s marcada como RETURNED por cancelación del pedido %s', $unit->getSerial(), $so->getFolio()),
-                        );
-                        $key = $unit->getPaca()->getId() . '-' . $unit->getWarehouse()->getId();
-                        if (!isset($grouped[$key])) {
-                            $grouped[$key] = ['paca' => $unit->getPaca(), 'warehouse' => $unit->getWarehouse(), 'count' => 0];
-                        }
-                        $grouped[$key]['count']++;
-                    }
-
-                    foreach ($grouped as $group) {
-                        $this->inventoryManager->recordMovement(
-                            paca: $group['paca'],
-                            warehouse: $group['warehouse'],
-                            bin: null,
-                            reason: $returnReason,
-                            user: $currentUser,
-                            quantity: $group['count'],
-                            referenceType: 'sales_order',
-                            referenceId: $so->getId(),
-                            notes: sprintf('Cancelación pedido %s - %s', $so->getFolio(), $group['paca']->getCode()),
-                            forceAdjustment: true,
-                        );
-                    }
-                }
-            }
-
-            if ($newStatus === SalesOrder::STATUS_RETURNED) {
-                $returnReason = $this->requireInventoryReason(InventoryReason::CODE_RETURN);
-
-                $units = $this->em->getRepository(PacaUnit::class)->findBy([
-                    'salesOrder' => $so,
-                ]);
-
-                $grouped = [];
-                foreach ($units as $unit) {
-                    if (in_array($unit->getStatus(), [PacaUnit::STATUS_DISPATCHED, PacaUnit::STATUS_SOLD], true)) {
-                        $unit->setStatus(PacaUnit::STATUS_RETURNED);
-                        $this->recordStatusTrace(
-                            unit: $unit,
-                            reason: $physicalReason,
-                            user: $currentUser,
-                            referenceType: 'sales_order',
-                            referenceId: $so->getId(),
-                            notes: sprintf('Unidad %s marcada como RETURNED en pedido %s', $unit->getSerial(), $so->getFolio()),
-                        );
-                        $key = $unit->getPaca()->getId() . '-' . $unit->getWarehouse()->getId();
-                        if (!isset($grouped[$key])) {
-                            $grouped[$key] = ['paca' => $unit->getPaca(), 'warehouse' => $unit->getWarehouse(), 'count' => 0];
-                        }
-                        $grouped[$key]['count']++;
-                    }
-                }
-
-                foreach ($grouped as $group) {
-                    $this->inventoryManager->recordMovement(
-                        paca: $group['paca'],
-                        warehouse: $group['warehouse'],
-                        bin: null,
-                        reason: $returnReason,
-                        user: $currentUser,
-                        quantity: $group['count'],
-                        referenceType: 'sales_order',
-                        referenceId: $so->getId(),
-                        notes: sprintf('Devolución pedido %s - %s', $so->getFolio(), $group['paca']->getCode()),
-                        forceAdjustment: true,
-                    );
-                }
             }
 
             $this->em->flush();
             $this->em->commit();
 
             $unitsByItem = $this->getUnitsByOrderItems($so);
+
             return new SalesOrderDetailResponse($so, $unitsByItem);
         } catch (\Exception $e) {
             $this->em->rollback();
@@ -522,12 +380,150 @@ final readonly class SalesOrderService
         }
     }
 
-    private const ALLOWED_PAYMENT_TRANSITIONS = [
-        SalesOrder::PAYMENT_PENDING => [SalesOrder::PAYMENT_PARTIAL, SalesOrder::PAYMENT_PAID],
-        SalesOrder::PAYMENT_PARTIAL => [SalesOrder::PAYMENT_PAID, SalesOrder::PAYMENT_REFUNDED],
-        SalesOrder::PAYMENT_PAID => [SalesOrder::PAYMENT_REFUNDED],
-        SalesOrder::PAYMENT_REFUNDED => [],
-    ];
+    public function returnOrder(int $id, ReturnSalesOrderRequest $request, User $currentUser): SalesOrderDetailResponse
+    {
+        $so = $this->salesOrderRepository->createQueryBuilder('so')
+            ->leftJoin('so.company', 'c')
+            ->leftJoin('so.customer', 'cu')
+            ->leftJoin('so.user', 'u')
+            ->leftJoin('so.seller', 'se')
+            ->leftJoin('so.items', 'i')
+            ->leftJoin('i.paca', 'p')
+            ->leftJoin('so.statusHistory', 'sh')
+            ->leftJoin('sh.user', 'shu')
+            ->addSelect('c', 'cu', 'u', 'se', 'i', 'p', 'sh', 'shu')
+            ->where('so.id = :id')
+            ->setParameter('id', $id)
+            ->getQuery()
+            ->getOneOrNullResult();
+
+        if ($so === null) {
+            throw new NotFoundHttpException(sprintf('Pedido de venta con ID %d no encontrado.', $id));
+        }
+
+        if (!in_array($so->getStatus(), [SalesOrder::STATUS_SHIPPED, SalesOrder::STATUS_DELIVERED, SalesOrder::STATUS_PARTIALLY_RETURNED], true)) {
+            throw new BadRequestHttpException(
+                sprintf('Solo se puede devolver un pedido en estado SHIPPED, DELIVERED o PARTIALLY_RETURNED. Estado actual: %s.', $so->getStatus()),
+            );
+        }
+
+        $units = $this->em->getRepository(PacaUnit::class)->findBy([
+            'salesOrder' => $so,
+        ]);
+
+        $returnableUnits = array_filter(
+            $units,
+            static fn (PacaUnit $unit): bool => in_array($unit->getStatus(), [PacaUnit::STATUS_DISPATCHED, PacaUnit::STATUS_SOLD], true),
+        );
+
+        if ($returnableUnits === []) {
+            throw new BadRequestHttpException(
+                sprintf('El pedido %s no tiene unidades en estado despachado o vendido para registrar devolución.', $so->getFolio()),
+            );
+        }
+
+        $this->em->beginTransaction();
+
+        try {
+            $this->applyReturnToUnits(
+                so: $so,
+                units: array_values($returnableUnits),
+                currentUser: $currentUser,
+                targetStatus: SalesOrder::STATUS_RETURNED,
+                historyNotes: $request->notes ?? 'Devolución explícita del pedido',
+                movementNotesTemplate: 'Devolución explícita pedido %s - %s',
+                unitTraceTemplate: 'Unidad %s marcada como RETURNED en devolución explícita del pedido %s',
+            );
+
+            $unitsByItem = $this->getUnitsByOrderItems($so);
+
+            return new SalesOrderDetailResponse($so, $unitsByItem);
+        } catch (\Exception $e) {
+            $this->em->rollback();
+            throw $e;
+        }
+    }
+
+    public function partialReturnOrder(int $id, PartialReturnSalesOrderRequest $request, User $currentUser): SalesOrderDetailResponse
+    {
+        $so = $this->salesOrderRepository->createQueryBuilder('so')
+            ->leftJoin('so.company', 'c')
+            ->leftJoin('so.customer', 'cu')
+            ->leftJoin('so.user', 'u')
+            ->leftJoin('so.seller', 'se')
+            ->leftJoin('so.items', 'i')
+            ->leftJoin('i.paca', 'p')
+            ->leftJoin('so.statusHistory', 'sh')
+            ->leftJoin('sh.user', 'shu')
+            ->addSelect('c', 'cu', 'u', 'se', 'i', 'p', 'sh', 'shu')
+            ->where('so.id = :id')
+            ->setParameter('id', $id)
+            ->getQuery()
+            ->getOneOrNullResult();
+
+        if ($so === null) {
+            throw new NotFoundHttpException(sprintf('Pedido de venta con ID %d no encontrado.', $id));
+        }
+
+        if (!in_array($so->getStatus(), [SalesOrder::STATUS_SHIPPED, SalesOrder::STATUS_DELIVERED, SalesOrder::STATUS_PARTIALLY_RETURNED], true)) {
+            throw new BadRequestHttpException(
+                sprintf('Solo se puede registrar devolución parcial para pedidos en estado SHIPPED, DELIVERED o PARTIALLY_RETURNED. Estado actual: %s.', $so->getStatus()),
+            );
+        }
+
+        $units = $this->em->getRepository(PacaUnit::class)->findBy([
+            'salesOrder' => $so,
+        ]);
+
+        $unitsById = [];
+        $returnableUnits = [];
+        foreach ($units as $unit) {
+            $unitsById[$unit->getId()] = $unit;
+            if (in_array($unit->getStatus(), [PacaUnit::STATUS_DISPATCHED, PacaUnit::STATUS_SOLD], true)) {
+                $returnableUnits[$unit->getId()] = $unit;
+            }
+        }
+
+        $selectedUnits = [];
+        foreach (array_values(array_unique($request->unitIds)) as $unitId) {
+            if (!isset($unitsById[$unitId])) {
+                throw new BadRequestHttpException(sprintf('La unidad %d no pertenece al pedido %s.', $unitId, $so->getFolio()));
+            }
+            if (!isset($returnableUnits[$unitId])) {
+                throw new BadRequestHttpException(sprintf('La unidad %s no está en estado retornable para el pedido %s.', $unitsById[$unitId]->getSerial(), $so->getFolio()));
+            }
+
+            $selectedUnits[] = $unitsById[$unitId];
+        }
+
+        if ($selectedUnits === []) {
+            throw new BadRequestHttpException('Debe seleccionar al menos una unidad para devolución parcial.');
+        }
+
+        $remainingReturnableCount = count($returnableUnits) - count($selectedUnits);
+        $targetStatus = $remainingReturnableCount === 0 ? SalesOrder::STATUS_RETURNED : SalesOrder::STATUS_PARTIALLY_RETURNED;
+
+        $this->em->beginTransaction();
+
+        try {
+            $this->applyReturnToUnits(
+                so: $so,
+                units: $selectedUnits,
+                currentUser: $currentUser,
+                targetStatus: $targetStatus,
+                historyNotes: $request->notes ?? 'Devolución parcial explícita del pedido',
+                movementNotesTemplate: 'Devolución parcial pedido %s - %s',
+                unitTraceTemplate: 'Unidad %s marcada como RETURNED en devolución parcial del pedido %s',
+            );
+
+            $unitsByItem = $this->getUnitsByOrderItems($so);
+
+            return new SalesOrderDetailResponse($so, $unitsByItem);
+        } catch (\Exception $e) {
+            $this->em->rollback();
+            throw $e;
+        }
+    }
 
     public function changePaymentStatus(int $id, ChangeStatusRequest $request, User $currentUser): SalesOrderDetailResponse
     {
@@ -550,73 +546,129 @@ final readonly class SalesOrderService
             throw new NotFoundHttpException(sprintf('Pedido de venta con ID %d no encontrado.', $id));
         }
 
-        $currentPayment = $so->getPaymentStatus();
-        $newPayment = $request->status;
+        $newPaymentStatus = $request->status;
+        if (!in_array($newPaymentStatus, [
+            SalesOrder::PAYMENT_PENDING,
+            SalesOrder::PAYMENT_PARTIAL,
+            SalesOrder::PAYMENT_PAID,
+            SalesOrder::PAYMENT_REFUNDED,
+        ], true)) {
+            throw new BadRequestHttpException(sprintf('Estado de pago "%s" no válido.', $newPaymentStatus));
+        }
 
-        $allowed = self::ALLOWED_PAYMENT_TRANSITIONS[$currentPayment] ?? [];
-        if (!in_array($newPayment, $allowed, true)) {
+        if ($newPaymentStatus === SalesOrder::PAYMENT_REFUNDED) {
             throw new BadRequestHttpException(
-                sprintf('No se puede cambiar el estado de pago de "%s" a "%s".', $currentPayment, $newPayment),
+                'El estado de pago "REFUNDED" solo se asigna automáticamente desde devoluciones explícitas.',
             );
         }
 
-        $so->setPaymentStatus($newPayment);
+        $this->em->beginTransaction();
 
-        $history = new SalesOrderStatusHistory();
-        $history->setUser($currentUser);
-        $history->setFromStatus('PAGO:' . $currentPayment);
-        $history->setToStatus('PAGO:' . $newPayment);
-        $history->setNotes($request->notes);
-        $so->addStatusHistory($history);
+        try {
+            $currentPaymentStatus = $so->getPaymentStatus();
 
-        $this->em->flush();
+            $so->setPaymentStatus($newPaymentStatus);
 
-        return new SalesOrderDetailResponse($so);
-    }
+            $history = new SalesOrderStatusHistory();
+            $history->setUser($currentUser);
+            $history->setFromStatus(sprintf('PAGO:%s', $currentPaymentStatus));
+            $history->setToStatus(sprintf('PAGO:%s', $newPaymentStatus));
+            $history->setNotes($request->notes ?? sprintf('Estado de pago actualizado a %s', $newPaymentStatus));
+            $so->addStatusHistory($history);
 
-    public function delete(int $id): void
-    {
-        $so = $this->salesOrderRepository->find($id);
-        if ($so === null) {
-            throw new NotFoundHttpException(sprintf('Pedido de venta con ID %d no encontrado.', $id));
+            $this->em->flush();
+            $this->em->commit();
+
+            $unitsByItem = $this->getUnitsByOrderItems($so);
+
+            return new SalesOrderDetailResponse($so, $unitsByItem);
+        } catch (\Exception $e) {
+            $this->em->rollback();
+            throw $e;
         }
-
-        if ($so->getStatus() !== SalesOrder::STATUS_PENDING) {
-            throw new BadRequestHttpException('Solo se pueden eliminar pedidos en estado PENDIENTE.');
-        }
-
-        // Release all reserved PacaUnits
-        $this->inventoryManager->releaseAllUnitsForOrder($so);
-
-        $this->em->remove($so);
-        $this->em->flush();
     }
 
     /**
-     * @return array<int, array<array{id: int, serial: string, warehouseId: int, warehouseName: string, status: string}>>
+     * @param list<PacaUnit> $units
      */
-    private function getUnitsByOrderItems(SalesOrder $so): array
-    {
-        $units = $this->em->getRepository(PacaUnit::class)->findBy([
-            'salesOrder' => $so,
-        ]);
+    private function applyReturnToUnits(
+        SalesOrder $so,
+        array $units,
+        User $currentUser,
+        string $targetStatus,
+        string $historyNotes,
+        string $movementNotesTemplate,
+        string $unitTraceTemplate,
+    ): void {
+        $fromStatus = $so->getStatus();
+        $returnReason = $this->requireInventoryReason(InventoryReason::CODE_RETURN);
+        $physicalReason = $this->requireInventoryReason(InventoryReason::CODE_PHYSICAL);
 
-        $map = [];
+        $so->setStatus($targetStatus);
+        $so->setDeliveryStatus(SalesOrder::DELIVERY_RETURNED);
+        $this->reconcilePaymentStatusAfterReturn($so, $targetStatus);
+
+        $history = new SalesOrderStatusHistory();
+        $history->setUser($currentUser);
+        $history->setFromStatus($fromStatus);
+        $history->setToStatus($targetStatus);
+        $history->setNotes($historyNotes);
+        $so->addStatusHistory($history);
+
+        $grouped = [];
         foreach ($units as $unit) {
-            $itemId = $unit->getSalesOrderItem()?->getId();
-            if ($itemId === null) {
-                continue;
+            $unit->setStatus(PacaUnit::STATUS_RETURNED);
+            $this->recordStatusTrace(
+                unit: $unit,
+                reason: $physicalReason,
+                user: $currentUser,
+                referenceType: 'sales_order',
+                referenceId: $so->getId(),
+                notes: sprintf($unitTraceTemplate, $unit->getSerial(), $so->getFolio()),
+            );
+
+            $key = $unit->getPaca()->getId() . '-' . $unit->getWarehouse()->getId();
+            if (!isset($grouped[$key])) {
+                $grouped[$key] = ['paca' => $unit->getPaca(), 'warehouse' => $unit->getWarehouse(), 'count' => 0];
             }
-            $map[$itemId][] = [
-                'id' => $unit->getId(),
-                'serial' => $unit->getSerial(),
-                'warehouseId' => $unit->getWarehouse()->getId(),
-                'warehouseName' => $unit->getWarehouse()->getName(),
-                'status' => $unit->getStatus(),
-            ];
+            $grouped[$key]['count']++;
         }
 
-        return $map;
+        foreach ($grouped as $group) {
+            $this->inventoryManager->recordMovement(
+                paca: $group['paca'],
+                warehouse: $group['warehouse'],
+                bin: null,
+                reason: $returnReason,
+                user: $currentUser,
+                quantity: $group['count'],
+                referenceType: 'sales_order',
+                referenceId: $so->getId(),
+                notes: sprintf($movementNotesTemplate, $so->getFolio(), $group['paca']->getCode()),
+                forceAdjustment: true,
+                affectsCachedStock: false,
+            );
+        }
+
+        $this->em->flush();
+        $this->em->commit();
+    }
+
+    private function reconcilePaymentStatusAfterReturn(SalesOrder $so, string $targetStatus): void
+    {
+        $currentPaymentStatus = $so->getPaymentStatus();
+
+        if ($targetStatus === SalesOrder::STATUS_RETURNED) {
+            if (in_array($currentPaymentStatus, [SalesOrder::PAYMENT_PAID, SalesOrder::PAYMENT_PARTIAL], true)) {
+                $so->setPaymentStatus(SalesOrder::PAYMENT_REFUNDED);
+            }
+
+            return;
+        }
+
+        if ($targetStatus === SalesOrder::STATUS_PARTIALLY_RETURNED && $currentPaymentStatus === SalesOrder::PAYMENT_PAID) {
+            $so->setPaymentStatus(SalesOrder::PAYMENT_PARTIAL);
+        }
     }
 
     private function recordStatusTrace(
@@ -639,6 +691,34 @@ final readonly class SalesOrderService
             notes: $notes,
             pacaUnit: $unit,
         );
+    }
+
+    /**
+     * @return array<int, array<array{id: int, serial: string, warehouseId: int, warehouseName: string, status: string}>>
+     */
+    private function getUnitsByOrderItems(SalesOrder $so): array
+    {
+        $units = $this->em->getRepository(PacaUnit::class)->findBy([
+            'salesOrder' => $so,
+        ]);
+
+        $map = [];
+        foreach ($units as $unit) {
+            $itemId = $unit->getSalesOrderItem()?->getId();
+            if ($itemId === null) {
+                continue;
+            }
+
+            $map[$itemId][] = [
+                'id' => $unit->getId(),
+                'serial' => $unit->getSerial(),
+                'warehouseId' => $unit->getWarehouse()->getId(),
+                'warehouseName' => $unit->getWarehouse()->getName(),
+                'status' => $unit->getStatus(),
+            ];
+        }
+
+        return $map;
     }
 
     private function requireInventoryReason(string $code): InventoryReason

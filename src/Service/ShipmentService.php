@@ -62,26 +62,7 @@ final readonly class ShipmentService
 
     public function show(int $id): ShipmentOrderDetailResponse
     {
-        $sh = $this->shipmentOrderRepository->createQueryBuilder('sho')
-            ->leftJoin('sho.salesOrder', 'so')
-            ->leftJoin('so.customer', 'cu')
-            ->leftJoin('so.items', 'soi')
-            ->leftJoin('soi.paca', 'soip')
-            ->leftJoin('sho.warehouse', 'w')
-            ->leftJoin('sho.createdBy', 'cb')
-            ->leftJoin('sho.items', 'i')
-            ->leftJoin('i.pacaUnit', 'pu')
-            ->leftJoin('pu.paca', 'p')
-            ->leftJoin('i.scannedBy', 'sb')
-            ->addSelect('so', 'cu', 'soi', 'soip', 'w', 'cb', 'i', 'pu', 'p', 'sb')
-            ->where('sho.id = :id')
-            ->setParameter('id', $id)
-            ->getQuery()
-            ->getOneOrNullResult();
-
-        if ($sh === null) {
-            throw new NotFoundHttpException(sprintf('Envío con ID %d no encontrado.', $id));
-        }
+        $sh = $this->findShipmentOrFail($id);
 
         return new ShipmentOrderDetailResponse($sh, $this->getUnitsByOrderItems($sh->getSalesOrder()));
     }
@@ -111,6 +92,32 @@ final readonly class ShipmentService
         return $map;
     }
 
+    private function findShipmentOrFail(int $id): ShipmentOrder
+    {
+        $sh = $this->shipmentOrderRepository->createQueryBuilder('sho')
+            ->leftJoin('sho.salesOrder', 'so')
+            ->leftJoin('so.customer', 'cu')
+            ->leftJoin('so.items', 'soi')
+            ->leftJoin('soi.paca', 'soip')
+            ->leftJoin('sho.warehouse', 'w')
+            ->leftJoin('sho.createdBy', 'cb')
+            ->leftJoin('sho.items', 'i')
+            ->leftJoin('i.pacaUnit', 'pu')
+            ->leftJoin('pu.paca', 'p')
+            ->leftJoin('i.scannedBy', 'sb')
+            ->addSelect('so', 'cu', 'soi', 'soip', 'w', 'cb', 'i', 'pu', 'p', 'sb')
+            ->where('sho.id = :id')
+            ->setParameter('id', $id)
+            ->getQuery()
+            ->getOneOrNullResult();
+
+        if (!$sh instanceof ShipmentOrder) {
+            throw new NotFoundHttpException(sprintf('Envío con ID %d no encontrado.', $id));
+        }
+
+        return $sh;
+    }
+
     public function create(CreateShipmentOrderRequest $request, User $user): ShipmentOrderResponse
     {
         $salesOrder = $this->em->find(SalesOrder::class, $request->salesOrderId);
@@ -119,13 +126,19 @@ final readonly class ShipmentService
         }
 
         $allowedStatuses = [
-            SalesOrder::STATUS_CONFIRMED,
+            SalesOrder::STATUS_RESERVED,
             SalesOrder::STATUS_PREPARING,
             SalesOrder::STATUS_SHIPPED,
         ];
         if (!in_array($salesOrder->getStatus(), $allowedStatuses, true)) {
             throw new BadRequestHttpException(
-                sprintf('El pedido de venta debe estar en estado CONFIRMADO, PREPARANDO o ENVIADO. Estado actual: %s.', $salesOrder->getStatus()),
+                sprintf('El pedido de venta debe estar en estado RESERVED, PREPARING o SHIPPED para generar despacho. Estado actual: %s.', $salesOrder->getStatus()),
+            );
+        }
+
+        if ($salesOrder->getPaymentStatus() !== SalesOrder::PAYMENT_PAID) {
+            throw new BadRequestHttpException(
+                sprintf('El pedido %s debe estar en estado de pago PAID para proceder a despacho. Estado de pago actual: %s.', $salesOrder->getFolio(), $salesOrder->getPaymentStatus()),
             );
         }
 
@@ -133,6 +146,31 @@ final readonly class ShipmentService
         if ($warehouse === null) {
             throw new NotFoundHttpException(sprintf('Almacén con ID %d no encontrado.', $request->warehouseId));
         }
+
+        $existingActiveShipment = $this->shipmentOrderRepository->createQueryBuilder('sho')
+            ->where('sho.salesOrder = :salesOrder')
+            ->andWhere('sho.status IN (:statuses)')
+            ->setParameter('salesOrder', $salesOrder)
+            ->setParameter('statuses', [
+                ShipmentOrder::STATUS_PENDING,
+                ShipmentOrder::STATUS_PICKING,
+                ShipmentOrder::STATUS_PACKED,
+                ShipmentOrder::STATUS_SHIPPED,
+            ])
+            ->setMaxResults(1)
+            ->getQuery()
+            ->getOneOrNullResult();
+
+        if ($existingActiveShipment instanceof ShipmentOrder) {
+            throw new ConflictHttpException(
+                sprintf('El pedido %s ya tiene un envío activo (%s). Cancélalo o complétalo antes de generar otro.', $salesOrder->getFolio(), $existingActiveShipment->getFolio()),
+            );
+        }
+
+        $reservedUnits = $this->em->getRepository(PacaUnit::class)->findBy([
+            'salesOrder' => $salesOrder,
+        ]);
+        $this->assertOrderWarehouseConsistency($salesOrder, $warehouse, $reservedUnits);
 
         $this->em->beginTransaction();
 
@@ -147,9 +185,17 @@ final readonly class ShipmentService
             $folio = $this->folioGenerator->generate('ENV', ShipmentOrder::class);
             $sh->setFolio($folio);
 
-            if ($salesOrder->getStatus() === SalesOrder::STATUS_CONFIRMED) {
+            if ($salesOrder->getStatus() === SalesOrder::STATUS_RESERVED) {
+                $fromStatus = $salesOrder->getStatus();
                 $salesOrder->setStatus(SalesOrder::STATUS_PREPARING);
                 $salesOrder->setDeliveryStatus(SalesOrder::DELIVERY_PREPARING);
+
+                $history = new \App\Entity\SalesOrderStatusHistory();
+                $history->setUser($user);
+                $history->setFromStatus($fromStatus);
+                $history->setToStatus(SalesOrder::STATUS_PREPARING);
+                $history->setNotes(sprintf('Pedido enviado a preparación al crear el envío %s', $folio));
+                $salesOrder->addStatusHistory($history);
             }
 
             $this->em->persist($sh);
@@ -182,6 +228,12 @@ final readonly class ShipmentService
         if ($pacaUnit->getSalesOrder() === null || $pacaUnit->getSalesOrder()->getId() !== $sh->getSalesOrder()->getId()) {
             throw new BadRequestHttpException(
                 sprintf('La unidad con serial "%s" no pertenece al pedido de venta %s.', $request->serial, $sh->getSalesOrder()->getFolio()),
+            );
+        }
+
+        if ($pacaUnit->getWarehouse()->getId() !== $sh->getWarehouse()->getId()) {
+            throw new ConflictHttpException(
+                sprintf('La unidad con serial "%s" pertenece al almacén %s y no puede surtirse en el envío %s del almacén %s.', $request->serial, $pacaUnit->getWarehouse()->getName(), $sh->getFolio(), $sh->getWarehouse()->getName()),
             );
         }
 
@@ -247,6 +299,12 @@ final readonly class ShipmentService
             );
         }
 
+        if (count($sh->getItems()) === 0) {
+            throw new ConflictHttpException(
+                sprintf('No se pueden enviar envíos vacíos. Por favor, escanee al menos una unidad antes de enviar el envío %s.', $sh->getFolio()),
+            );
+        }
+
         $this->em->beginTransaction();
 
         try {
@@ -269,6 +327,19 @@ final readonly class ShipmentService
             $grouped = [];
             foreach ($sh->getItems() as $item) {
                 $unit = $item->getPacaUnit();
+
+                if ($unit->getStatus() !== PacaUnit::STATUS_PICKED) {
+                    throw new ConflictHttpException(
+                        sprintf('La unidad %s no está en estado PICKED y no puede registrar salida física. Estado actual: %s.', $unit->getSerial(), $unit->getStatus()),
+                    );
+                }
+
+                if ($unit->getWarehouse()->getId() !== $sh->getWarehouse()->getId()) {
+                    throw new ConflictHttpException(
+                        sprintf('La unidad %s pertenece al almacén %s y no coincide con el almacén %s del envío %s.', $unit->getSerial(), $unit->getWarehouse()->getName(), $sh->getWarehouse()->getName(), $sh->getFolio()),
+                    );
+                }
+
                 $unit->setStatus(PacaUnit::STATUS_DISPATCHED);
 
                 $key = $unit->getPaca()->getId() . '-' . $unit->getWarehouse()->getId();
@@ -295,8 +366,16 @@ final readonly class ShipmentService
 
             // Update sales order status
             $so = $sh->getSalesOrder();
+            $fromStatus = $so->getStatus();
             $so->setStatus(SalesOrder::STATUS_SHIPPED);
             $so->setDeliveryStatus(SalesOrder::DELIVERY_SHIPPED);
+
+            $history = new \App\Entity\SalesOrderStatusHistory();
+            $history->setUser($user);
+            $history->setFromStatus($fromStatus);
+            $history->setToStatus(SalesOrder::STATUS_SHIPPED);
+            $history->setNotes(sprintf('Pedido despachado mediante el envío %s', $sh->getFolio()));
+            $so->addStatusHistory($history);
 
             // Update cachedStock per affected paca
             $affectedPacas = [];
@@ -326,7 +405,13 @@ final readonly class ShipmentService
 
         if ($sh->getStatus() !== ShipmentOrder::STATUS_SHIPPED) {
             throw new BadRequestHttpException(
-                sprintf('El envío debe estar en estado SHIPPED para marcar como entregado. Estado actual: %s.', $sh->getStatus()),
+                sprintf('El envío debe estar en estado SHIPPED para marcarse como entregado. Estado actual: %s.', $sh->getStatus()),
+            );
+        }
+
+        if (count($sh->getItems()) === 0) {
+            throw new ConflictHttpException(
+                sprintf('El envío %s no tiene unidades escaneadas para marcar entrega.', $sh->getFolio()),
             );
         }
 
@@ -336,133 +421,88 @@ final readonly class ShipmentService
             $sh->setStatus(ShipmentOrder::STATUS_DELIVERED);
             $sh->setDeliveredAt(new \DateTimeImmutable());
 
-            $physicalReason = $this->requireInventoryReason(InventoryReason::CODE_PHYSICAL);
-
-            // Mark all units as SOLD
             foreach ($sh->getItems() as $item) {
                 $unit = $item->getPacaUnit();
-                $unit->setStatus(PacaUnit::STATUS_SOLD);
+
+                if ($unit->getStatus() !== PacaUnit::STATUS_DISPATCHED) {
+                    throw new ConflictHttpException(
+                        sprintf('La unidad %s no está en estado DISPATCHED y no puede marcarse como entregada. Estado actual: %s.', $unit->getSerial(), $unit->getStatus()),
+                    );
+                }
+
+                $unit->setStatus(PacaUnit::STATUS_DELIVERED);
+
+                $physicalReason = $this->requireInventoryReason(InventoryReason::CODE_PHYSICAL);
                 $this->recordStatusTrace(
                     unit: $unit,
                     reason: $physicalReason,
                     user: $user,
                     referenceType: 'shipment_order',
                     referenceId: $sh->getId(),
-                    notes: sprintf('Unidad %s marcada como SOLD al entregar envío %s', $unit->getSerial(), $sh->getFolio()),
+                    notes: sprintf('Unidad %s marcada como DELIVERED en envío %s', $unit->getSerial(), $sh->getFolio()),
                 );
             }
 
-            // Update sales order
             $so = $sh->getSalesOrder();
+            $fromStatus = $so->getStatus();
             $so->setStatus(SalesOrder::STATUS_DELIVERED);
-            $so->setDeliveredAt(new \DateTimeImmutable());
             $so->setDeliveryStatus(SalesOrder::DELIVERY_DELIVERED);
+            $so->setDeliveredAt(new \DateTimeImmutable());
+
+            $history = new \App\Entity\SalesOrderStatusHistory();
+            $history->setUser($user);
+            $history->setFromStatus($fromStatus);
+            $history->setToStatus(SalesOrder::STATUS_DELIVERED);
+            $history->setNotes(sprintf('Pedido entregado al cliente desde el envío %s', $sh->getFolio()));
+            $so->addStatusHistory($history);
 
             $this->em->flush();
             $this->em->commit();
 
             return $this->show($id);
         } catch (\Exception $e) {
-            $this->em->rollback();
+            if ($this->em->getConnection()->isTransactionActive()) {
+                $this->em->rollback();
+            }
             throw $e;
         }
     }
 
-    public function cancel(int $id, User $user): ShipmentOrderDetailResponse
+    private function assertOrderWarehouseConsistency(SalesOrder $salesOrder, Warehouse $warehouse, array $units): void
     {
-        $sh = $this->findShipmentOrFail($id);
-
-        if ($sh->getStatus() === ShipmentOrder::STATUS_DELIVERED || $sh->getStatus() === ShipmentOrder::STATUS_CANCELLED) {
-            throw new BadRequestHttpException(
-                sprintf('No se puede cancelar un envío en estado %s.', $sh->getStatus()),
+        if ($salesOrder->getStatus() === SalesOrder::STATUS_RESERVED && count($units) === 0) {
+            throw new ConflictHttpException(
+                sprintf('El pedido %s está en RESERVED pero no tiene unidades asignadas.', $salesOrder->getFolio()),
             );
         }
 
-        $this->em->beginTransaction();
+        $relevantUnits = array_filter(
+            $units,
+            static fn (PacaUnit $unit): bool => in_array($unit->getStatus(), [PacaUnit::STATUS_RESERVED, PacaUnit::STATUS_PICKED, PacaUnit::STATUS_DISPATCHED], true),
+        );
 
-        try {
-            $currentStatus = $sh->getStatus();
-            $physicalReason = $this->requireInventoryReason(InventoryReason::CODE_PHYSICAL);
-
-            if (in_array($currentStatus, [ShipmentOrder::STATUS_PICKING, ShipmentOrder::STATUS_PACKED], true)) {
-                // Revert scanned units back to RESERVED
-                foreach ($sh->getItems() as $item) {
-                    $unit = $item->getPacaUnit();
-                    $unit->setStatus(PacaUnit::STATUS_RESERVED);
-                    $this->recordStatusTrace(
-                        unit: $unit,
-                        reason: $physicalReason,
-                        user: $user,
-                        referenceType: 'shipment_order',
-                        referenceId: $sh->getId(),
-                        notes: sprintf('Unidad %s regresada a RESERVED por cancelación de envío %s', $unit->getSerial(), $sh->getFolio()),
-                    );
-                }
-            }
-
-            if ($currentStatus === ShipmentOrder::STATUS_SHIPPED) {
-                $returnReason = $this->requireInventoryReason(InventoryReason::CODE_RETURN);
-
-                $grouped = [];
-                foreach ($sh->getItems() as $item) {
-                    $unit = $item->getPacaUnit();
-                    $unit->setStatus(PacaUnit::STATUS_RETURNED);
-
-                    $key = $unit->getPaca()->getId() . '-' . $unit->getWarehouse()->getId();
-                    if (!isset($grouped[$key])) {
-                        $grouped[$key] = ['paca' => $unit->getPaca(), 'warehouse' => $unit->getWarehouse(), 'count' => 0];
-                    }
-                    $grouped[$key]['count']++;
-                }
-
-                foreach ($grouped as $group) {
-                    $this->inventoryManager->recordMovement(
-                        paca: $group['paca'],
-                        warehouse: $group['warehouse'],
-                        bin: null,
-                        reason: $returnReason,
-                        user: $user,
-                        quantity: $group['count'],
-                        referenceType: 'shipment_order',
-                        referenceId: $sh->getId(),
-                        notes: sprintf('Cancelación envío %s - %s', $sh->getFolio(), $group['paca']->getCode()),
-                        forceAdjustment: true,
-                    );
-                }
-
-                // Update cachedStock per affected paca
-                $affectedPacas = [];
-                foreach ($grouped as $group) {
-                    $pacaId = $group['paca']->getId();
-                    if (!isset($affectedPacas[$pacaId])) {
-                        $affectedPacas[$pacaId] = $group['paca'];
-                    }
-                }
-                foreach ($affectedPacas as $paca) {
-                    $this->inventoryManager->updateCachedStock($paca);
-                }
-            }
-
-            $sh->setStatus(ShipmentOrder::STATUS_CANCELLED);
-
-            $this->em->flush();
-            $this->em->commit();
-
-            return $this->show($id);
-        } catch (\Exception $e) {
-            $this->em->rollback();
-            throw $e;
-        }
-    }
-
-    private function findShipmentOrFail(int $id): ShipmentOrder
-    {
-        $sh = $this->shipmentOrderRepository->find($id);
-        if ($sh === null) {
-            throw new NotFoundHttpException(sprintf('Envío con ID %d no encontrado.', $id));
+        if ($relevantUnits === []) {
+            return;
         }
 
-        return $sh;
+        $warehouseIds = [];
+        foreach ($relevantUnits as $unit) {
+            $warehouseIds[$unit->getWarehouse()->getId()] = $unit->getWarehouse()->getName();
+        }
+
+        if (count($warehouseIds) > 1) {
+            throw new ConflictHttpException(
+                sprintf('El pedido %s tiene unidades asignadas en múltiples almacenes (%s). El flujo actual solo permite surtir desde una sola bodega por envío.', $salesOrder->getFolio(), implode(', ', array_values($warehouseIds))),
+            );
+        }
+
+        $orderWarehouseId = array_key_first($warehouseIds);
+        $orderWarehouseName = (string) current($warehouseIds);
+        if ($orderWarehouseId !== $warehouse->getId()) {
+            throw new ConflictHttpException(
+                sprintf('El pedido %s tiene unidades asignadas en el almacén %s y no coincide con el almacén %s solicitado para el envío.', $salesOrder->getFolio(), $orderWarehouseName, $warehouse->getName()),
+            );
+        }
     }
 
     private function recordStatusTrace(

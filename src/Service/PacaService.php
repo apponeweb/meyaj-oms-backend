@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Service;
 
+use App\DTO\Request\BulkUpdatePacaRequest;
 use App\DTO\Request\CreatePacaRequest;
 use App\DTO\Request\UpdatePacaRequest;
 use App\DTO\Response\PacaResponse;
@@ -19,8 +20,10 @@ use App\Pagination\PaginationRequest;
 use App\Pagination\Paginator;
 use App\Repository\PacaRepository;
 use App\Repository\PacaUnitRepository;
+use App\Repository\RoleActionPermissionRepository;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
 use Symfony\Component\HttpKernel\Exception\BadRequestHttpException;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 
@@ -30,6 +33,7 @@ final readonly class PacaService
         private EntityManagerInterface $em,
         private PacaRepository $pacaRepository,
         private PacaUnitRepository $pacaUnitRepo,
+        private RoleActionPermissionRepository $roleActionPermissionRepository,
         private Paginator $paginator,
         private InventoryManager $inventoryManager,
         private OperationMode $operationMode,
@@ -60,6 +64,9 @@ final readonly class PacaService
         $availableStock = $hasLocationFilter
             ? $this->pacaUnitRepo->countAvailableByPacaIdsFiltered($pacaIds, $warehouseId, $warehouseBinId)
             : $this->pacaUnitRepo->countAvailableByPacaIds($pacaIds);
+        $reservedStock = $hasLocationFilter
+            ? $this->pacaUnitRepo->countReservedByPacaIdsFiltered($pacaIds, $warehouseId, $warehouseBinId)
+            : $this->pacaUnitRepo->countReservedByPacaIds($pacaIds);
         $trackedStock = $hasLocationFilter
             ? $this->pacaUnitRepo->countTrackedByPacaIdsFiltered($pacaIds, $warehouseId, $warehouseBinId)
             : $this->pacaUnitRepo->countTrackedByPacaIds($pacaIds);
@@ -70,6 +77,7 @@ final readonly class PacaService
                 $availableStock[$p->getId()] ?? 0,
                 null,
                 $trackedStock[$p->getId()] ?? 0,
+                $reservedStock[$p->getId()] ?? 0,
             ), $result->data),
             meta: $result->meta,
         );
@@ -79,10 +87,11 @@ final readonly class PacaService
     {
         $p = $this->pacaRepository->find($id);
         if ($p === null) throw new NotFoundHttpException(\sprintf('Paca con ID %d no encontrada.', $id));
-        $availableStock = $this->pacaUnitRepo->countAvailableByPaca($p);
-        $stockByWarehouse = $this->pacaUnitRepo->countByPacaAndWarehouse($p);
+        $availableStock = $this->pacaUnitRepo->countAvailableByPaca($p->getId());
+        $reservedStock = $this->pacaUnitRepo->countReservedByPaca($p->getId());
+        $stockByWarehouse = $this->pacaUnitRepo->countByPacaAndWarehouse($p->getId());
         $trackedStock = $this->pacaUnitRepo->countTrackedByPaca($p->getId());
-        return new PacaResponse($p, $availableStock, $stockByWarehouse, $trackedStock);
+        return new PacaResponse($p, $availableStock, $stockByWarehouse, $trackedStock, $reservedStock);
     }
 
     public function getNextCode(): array
@@ -142,6 +151,63 @@ final readonly class PacaService
         $this->setRelations($p, $r->brandId, $r->labelId, $r->qualityGradeId, $r->seasonId, $r->genderId, $r->garmentTypeId, $r->fabricTypeId, $r->sizeProfileId, $r->supplierId);
         $this->em->flush();
         return new PacaResponse($p);
+    }
+
+    public function bulkUpdate(BulkUpdatePacaRequest $r, ?User $user): array
+    {
+        if ($user === null || $user->getRole() === null) {
+            throw new AccessDeniedHttpException('No tiene permisos para actualizar pacas masivamente.');
+        }
+
+        $hasPermission = $this->roleActionPermissionRepository->roleHasAllowedActionByCodes(
+            $user->getRole()->getId(),
+            'pacas',
+            'update',
+        );
+
+        if (!$hasPermission) {
+            throw new AccessDeniedHttpException('No tiene permisos para actualizar pacas masivamente.');
+        }
+
+        $pacaIds = array_values(array_unique(array_map('intval', $r->pacaIds)));
+        if ($pacaIds === []) {
+            throw new BadRequestHttpException('Debe proporcionar al menos una paca para actualizar.');
+        }
+
+        $pacas = $this->pacaRepository->findBy(['id' => $pacaIds]);
+        if ($pacas === []) {
+            throw new NotFoundHttpException('No se encontraron pacas para actualizar.');
+        }
+
+        foreach ($pacas as $paca) {
+            if ($r->purchasePrice !== null) {
+                $paca->setPurchasePrice($r->purchasePrice);
+            }
+
+            if ($r->sellingPrice !== null) {
+                $paca->setSellingPrice($r->sellingPrice);
+            }
+
+            $this->setRelations(
+                $paca,
+                $r->brandId,
+                $r->labelId,
+                $r->qualityGradeId,
+                $r->seasonId,
+                $r->genderId,
+                $r->garmentTypeId,
+                $r->fabricTypeId,
+                $r->sizeProfileId,
+                $r->supplierId,
+            );
+        }
+
+        $this->em->flush();
+
+        return [
+            'requested' => count($pacaIds),
+            'updated' => count($pacas),
+        ];
     }
 
     public function delete(int $id): void

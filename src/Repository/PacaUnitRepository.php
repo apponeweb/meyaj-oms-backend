@@ -14,6 +14,12 @@ use Doctrine\Persistence\ManagerRegistry;
  */
 class PacaUnitRepository extends ServiceEntityRepository
 {
+    private const TRACKED_STOCK_STATUSES = [
+        PacaUnit::STATUS_AVAILABLE,
+        PacaUnit::STATUS_RESERVED,
+        PacaUnit::STATUS_PICKED,
+    ];
+
     public function __construct(ManagerRegistry $registry)
     {
         parent::__construct($registry, PacaUnit::class);
@@ -112,11 +118,19 @@ class PacaUnitRepository extends ServiceEntityRepository
             ->where('pu.paca = :pacaId')
             ->andWhere('pu.status IN (:statuses)')
             ->setParameter('pacaId', $pacaId)
-            ->setParameter('statuses', [
-                PacaUnit::STATUS_AVAILABLE,
-                PacaUnit::STATUS_RESERVED,
-                PacaUnit::STATUS_PICKED,
-            ])
+            ->setParameter('statuses', self::TRACKED_STOCK_STATUSES)
+            ->getQuery()
+            ->getSingleScalarResult();
+    }
+
+    public function countReservedByPaca(int $pacaId): int
+    {
+        return (int) $this->createQueryBuilder('pu')
+            ->select('COUNT(pu.id)')
+            ->where('pu.paca = :pacaId')
+            ->andWhere('pu.status = :status')
+            ->setParameter('pacaId', $pacaId)
+            ->setParameter('status', PacaUnit::STATUS_RESERVED)
             ->getQuery()
             ->getSingleScalarResult();
     }
@@ -151,6 +165,34 @@ class PacaUnitRepository extends ServiceEntityRepository
 
     /**
      * @param int[] $pacaIds
+     * @return array<int, int> Map of pacaId => reservedCount
+     */
+    public function countReservedByPacaIds(array $pacaIds): array
+    {
+        if (empty($pacaIds)) {
+            return [];
+        }
+
+        $rows = $this->createQueryBuilder('pu')
+            ->select('IDENTITY(pu.paca) AS pacaId, COUNT(pu.id) AS cnt')
+            ->where('pu.paca IN (:ids)')
+            ->andWhere('pu.status = :status')
+            ->setParameter('ids', $pacaIds)
+            ->setParameter('status', PacaUnit::STATUS_RESERVED)
+            ->groupBy('pu.paca')
+            ->getQuery()
+            ->getArrayResult();
+
+        $map = [];
+        foreach ($rows as $row) {
+            $map[(int) $row['pacaId']] = (int) $row['cnt'];
+        }
+
+        return $map;
+    }
+
+    /**
+     * @param int[] $pacaIds
      * @return array<int, int> Map of pacaId => trackedCount across all warehouses
      */
     public function countTrackedByPacaIds(array $pacaIds): array
@@ -164,11 +206,7 @@ class PacaUnitRepository extends ServiceEntityRepository
             ->where('pu.paca IN (:ids)')
             ->andWhere('pu.status IN (:statuses)')
             ->setParameter('ids', $pacaIds)
-            ->setParameter('statuses', [
-                PacaUnit::STATUS_AVAILABLE,
-                PacaUnit::STATUS_RESERVED,
-                PacaUnit::STATUS_PICKED,
-            ])
+            ->setParameter('statuses', self::TRACKED_STOCK_STATUSES)
             ->groupBy('pu.paca')
             ->getQuery()
             ->getArrayResult();
@@ -236,11 +274,47 @@ class PacaUnitRepository extends ServiceEntityRepository
             ->where('pu.paca IN (:ids)')
             ->andWhere('pu.status IN (:statuses)')
             ->setParameter('ids', $pacaIds)
-            ->setParameter('statuses', [
-                PacaUnit::STATUS_AVAILABLE,
-                PacaUnit::STATUS_RESERVED,
-                PacaUnit::STATUS_PICKED,
-            ]);
+            ->setParameter('statuses', self::TRACKED_STOCK_STATUSES);
+
+        if ($warehouseId !== null) {
+            $qb->andWhere('IDENTITY(pu.warehouse) = :warehouseId')
+                ->setParameter('warehouseId', $warehouseId);
+        }
+
+        if ($warehouseBinId !== null) {
+            $qb->andWhere('IDENTITY(pu.warehouseBin) = :warehouseBinId')
+                ->setParameter('warehouseBinId', $warehouseBinId);
+        }
+
+        $rows = $qb
+            ->groupBy('pu.paca')
+            ->getQuery()
+            ->getArrayResult();
+
+        $map = [];
+        foreach ($rows as $row) {
+            $map[(int) $row['pacaId']] = (int) $row['cnt'];
+        }
+
+        return $map;
+    }
+
+    /**
+     * @param int[] $pacaIds
+     * @return array<int, int> Map of pacaId => reservedCount respecting optional warehouse filters
+     */
+    public function countReservedByPacaIdsFiltered(array $pacaIds, ?int $warehouseId = null, ?int $warehouseBinId = null): array
+    {
+        if (empty($pacaIds)) {
+            return [];
+        }
+
+        $qb = $this->createQueryBuilder('pu')
+            ->select('IDENTITY(pu.paca) AS pacaId, COUNT(pu.id) AS cnt')
+            ->where('pu.paca IN (:ids)')
+            ->andWhere('pu.status = :status')
+            ->setParameter('ids', $pacaIds)
+            ->setParameter('status', PacaUnit::STATUS_RESERVED);
 
         if ($warehouseId !== null) {
             $qb->andWhere('IDENTITY(pu.warehouse) = :warehouseId')
@@ -280,11 +354,11 @@ class PacaUnitRepository extends ServiceEntityRepository
             )
             ->leftJoin('pu.warehouse', 'w')
             ->where('pu.paca = :pacaId')
-            ->andWhere('pu.status NOT IN (:excluded)')
+            ->andWhere('pu.status IN (:statuses)')
             ->setParameter('pacaId', $pacaId)
             ->setParameter('available', PacaUnit::STATUS_AVAILABLE)
             ->setParameter('reserved', PacaUnit::STATUS_RESERVED)
-            ->setParameter('excluded', [PacaUnit::STATUS_SOLD, PacaUnit::STATUS_DAMAGED])
+            ->setParameter('statuses', self::TRACKED_STOCK_STATUSES)
             ->groupBy('pu.warehouse, w.name')
             ->getQuery()
             ->getArrayResult();
@@ -340,7 +414,7 @@ class PacaUnitRepository extends ServiceEntityRepository
             ->andWhere('pu.status IN (:statuses)')
             ->setParameter('pacaId', $pacaId)
             ->setParameter('warehouseId', $warehouseId)
-            ->setParameter('statuses', [PacaUnit::STATUS_AVAILABLE, PacaUnit::STATUS_RESERVED])
+            ->setParameter('statuses', self::TRACKED_STOCK_STATUSES)
             ->getQuery()
             ->getSingleScalarResult();
     }

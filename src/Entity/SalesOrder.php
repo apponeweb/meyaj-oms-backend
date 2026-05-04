@@ -25,11 +25,25 @@ class SalesOrder
 {
     public const STATUS_PENDING = 'PENDING';
     public const STATUS_CONFIRMED = 'CONFIRMED';
+    public const STATUS_RESERVED = 'RESERVED';
     public const STATUS_PREPARING = 'PREPARING';
     public const STATUS_SHIPPED = 'SHIPPED';
     public const STATUS_DELIVERED = 'DELIVERED';
     public const STATUS_CANCELLED = 'CANCELLED';
     public const STATUS_RETURNED = 'RETURNED';
+    public const STATUS_PARTIALLY_RETURNED = 'PARTIALLY_RETURNED';
+
+    public const STATUSES = [
+        self::STATUS_PENDING,
+        self::STATUS_CONFIRMED,
+        self::STATUS_RESERVED,
+        self::STATUS_PREPARING,
+        self::STATUS_SHIPPED,
+        self::STATUS_DELIVERED,
+        self::STATUS_CANCELLED,
+        self::STATUS_RETURNED,
+        self::STATUS_PARTIALLY_RETURNED,
+    ];
 
     public const PAYMENT_PENDING = 'PENDING';
     public const PAYMENT_PARTIAL = 'PARTIAL';
@@ -40,6 +54,7 @@ class SalesOrder
     public const DELIVERY_PREPARING = 'PREPARING';
     public const DELIVERY_SHIPPED = 'SHIPPED';
     public const DELIVERY_DELIVERED = 'DELIVERED';
+    public const DELIVERY_RETURNED = 'RETURNED';
 
     public const CHANNEL_POS = 'POS';
     public const CHANNEL_WEB = 'WEB';
@@ -92,7 +107,7 @@ class SalesOrder
     private string $orderType = self::TYPE_STANDARD;
 
     #[ORM\Column(length: 20)]
-    #[Assert\Choice(choices: ['PENDING', 'CONFIRMED', 'PREPARING', 'SHIPPED', 'DELIVERED', 'CANCELLED', 'RETURNED'])]
+    #[Assert\Choice(choices: self::STATUSES)]
     private string $status = self::STATUS_PENDING;
 
     #[ORM\Column(length: 20)]
@@ -100,7 +115,7 @@ class SalesOrder
     private string $paymentStatus = self::PAYMENT_PENDING;
 
     #[ORM\Column(length: 20)]
-    #[Assert\Choice(choices: ['PENDING', 'PREPARING', 'SHIPPED', 'DELIVERED'])]
+    #[Assert\Choice(choices: ['PENDING', 'PREPARING', 'SHIPPED', 'DELIVERED', 'RETURNED'])]
     private string $deliveryStatus = self::DELIVERY_PENDING;
 
     #[ORM\Column(type: Types::DECIMAL, precision: 14, scale: 2)]

@@ -6,6 +6,8 @@ namespace App\Controller;
 
 use App\DTO\Request\ChangeStatusRequest;
 use App\DTO\Request\CreateSalesOrderRequest;
+use App\DTO\Request\PartialReturnSalesOrderRequest;
+use App\DTO\Request\ReturnSalesOrderRequest;
 use App\Entity\User;
 use App\Pagination\PaginationRequest;
 use App\Service\SalesOrderService;
@@ -54,6 +56,52 @@ final class SalesOrderController extends AbstractController
         /** @var User $user */
         $user = $this->getUser();
         return $this->json($this->service->create($r, $user), Response::HTTP_CREATED);
+    }
+
+    #[Route('/{id}/reserve', methods: ['POST'], requirements: ['id' => '\d+'])]
+    #[OA\Post(summary: 'Reservar inventario para un pedido de venta')]
+    #[OA\Response(response: 200, description: 'Inventario reservado')]
+    #[OA\Response(response: 400, description: 'No se puede reservar el pedido')]
+    #[OA\Response(response: 404, description: 'Pedido no encontrado')]
+    public function reserve(int $id): JsonResponse
+    {
+        /** @var User $user */
+        $user = $this->getUser();
+        return $this->json($this->service->reserve($id, $user));
+    }
+
+    #[Route('/{id}/return', methods: ['POST'], requirements: ['id' => '\d+'])]
+    #[OA\Post(
+        summary: 'Registrar devolución explícita de un pedido de venta',
+        requestBody: new OA\RequestBody(
+            content: new OA\JsonContent(ref: new Model(type: ReturnSalesOrderRequest::class)),
+        ),
+    )]
+    #[OA\Response(response: 200, description: 'Devolución registrada')]
+    #[OA\Response(response: 400, description: 'No se puede devolver el pedido')]
+    #[OA\Response(response: 404, description: 'Pedido no encontrado')]
+    public function returnOrder(int $id, #[MapRequestPayload] ReturnSalesOrderRequest $r): JsonResponse
+    {
+        /** @var User $user */
+        $user = $this->getUser();
+        return $this->json($this->service->returnOrder($id, $r, $user));
+    }
+
+    #[Route('/{id}/partial-return', methods: ['POST'], requirements: ['id' => '\d+'])]
+    #[OA\Post(
+        summary: 'Registrar devolución parcial explícita de un pedido de venta',
+        requestBody: new OA\RequestBody(
+            content: new OA\JsonContent(ref: new Model(type: PartialReturnSalesOrderRequest::class)),
+        ),
+    )]
+    #[OA\Response(response: 200, description: 'Devolución parcial registrada')]
+    #[OA\Response(response: 400, description: 'No se puede registrar la devolución parcial')]
+    #[OA\Response(response: 404, description: 'Pedido no encontrado')]
+    public function partialReturnOrder(int $id, #[MapRequestPayload] PartialReturnSalesOrderRequest $r): JsonResponse
+    {
+        /** @var User $user */
+        $user = $this->getUser();
+        return $this->json($this->service->partialReturnOrder($id, $r, $user));
     }
 
     #[Route('/{id}/status', methods: ['POST'], requirements: ['id' => '\d+'])]

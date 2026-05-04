@@ -18,6 +18,8 @@ class InventoryReason
     public const CODE_PURCHASE     = 'PURCHASE';
     public const CODE_SALE         = 'SALE';
     public const CODE_RETURN       = 'RETURN';
+    public const CODE_RESERVE      = 'RESERVE';
+    public const CODE_RELEASE      = 'RELEASE';
     public const CODE_LOSS         = 'LOSS';
     public const CODE_TRANSFER_IN  = 'TRANSFER_IN';
     public const CODE_TRANSFER_OUT = 'TRANSFER_OUT';
@@ -30,6 +32,8 @@ class InventoryReason
         self::CODE_PURCHASE,
         self::CODE_SALE,
         self::CODE_RETURN,
+        self::CODE_RESERVE,
+        self::CODE_RELEASE,
     ];
 
     #[ORM\Id]
