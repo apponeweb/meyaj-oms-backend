@@ -156,6 +156,7 @@ final readonly class PacaExcelService
 
         $log->setStatus(PacaImportLog::STATUS_PROCESSING);
         $this->em->flush();
+        $logId = $log->getId();
 
         try {
             $spreadsheet = IOFactory::load($filePath);
@@ -191,6 +192,7 @@ final readonly class PacaExcelService
             $adjustmentOutReason = $this->requireInventoryReason(InventoryReason::CODE_ADJ_OUT);
 
             foreach ($rows as $rowNum => $row) {
+                $connection = $this->em->getConnection();
                 try {
                     $code = trim((string) ($row[$colMap['código'] ?? $colMap['codigo'] ?? ''] ?? ''));
                     if ($code === '') {
@@ -232,7 +234,10 @@ final readonly class PacaExcelService
                         continue;
                     }
 
-                    $namesInFile[$nameLower] = $code;
+                    $createdDelta = 0;
+                    $updatedDelta = 0;
+
+                    $connection->beginTransaction();
 
                     $existingPaca = $this->pacaRepository->findOneBy(['code' => $code]);
                     $isNew = $existingPaca === null;
@@ -246,10 +251,10 @@ final readonly class PacaExcelService
 
                     if ($isNew) {
                         $this->em->persist($paca);
-                        $created++;
-                        $existingNames[$nameLower] = $code;
+                        $this->em->flush();
+                        $createdDelta = 1;
                     } else {
-                        $updated++;
+                        $updatedDelta = 1;
                     }
 
                     $stockDelta = $this->syncUnitsForImport($paca, $warehouse, $isNew, $replaceUnits);
@@ -301,12 +306,38 @@ final readonly class PacaExcelService
                         );
                         $log->addError("Fila {$rowNum} (código '{$code}'): {$notes}");
                     }
+
+                    $connection->commit();
+                    $namesInFile[$nameLower] = $code;
+                    if ($isNew) {
+                        $existingNames[$nameLower] = $code;
+                    }
+                    $created += $createdDelta;
+                    $updated += $updatedDelta;
                 } catch (\Throwable $e) {
+                    if ($connection->isTransactionActive()) {
+                        $connection->rollBack();
+                    }
+
                     $errors[] = "Fila {$rowNum}" . (isset($code) && $code !== '' ? " (código '{$code}')" : '') . ': ' . $this->normalizeImportErrorMessage($e);
 
                     if (!$this->em->isOpen()) {
                         throw $e;
                     }
+
+                    $this->em->clear();
+                    $log = $this->importLogRepository->find($logId);
+                    if (!$log instanceof PacaImportLog) {
+                        throw new \RuntimeException('No se pudo recargar el log de importación después de un rollback.');
+                    }
+
+                    $warehouse = $this->warehouseRepository->find($warehouseId);
+                    if (!$warehouse instanceof Warehouse) {
+                        throw new \RuntimeException('No se pudo recargar la bodega después de un rollback.');
+                    }
+
+                    $adjustmentInReason = $this->requireInventoryReason(InventoryReason::CODE_ADJ_IN);
+                    $adjustmentOutReason = $this->requireInventoryReason(InventoryReason::CODE_ADJ_OUT);
                 }
 
                 $processed++;
@@ -658,6 +689,16 @@ final readonly class PacaExcelService
             $map[$key] = $lookup;
         }
         return $map;
+    }
+
+    private function requireInventoryReason(string $code): InventoryReason
+    {
+        $reason = $this->em->getRepository(InventoryReason::class)->findOneBy(['code' => $code]);
+        if (!$reason instanceof InventoryReason) {
+            throw new BadRequestHttpException(sprintf('No está configurado el motivo de inventario %s. Configure el catálogo antes de continuar.', $code));
+        }
+
+        return $reason;
     }
 
     private function normalizeImportErrorMessage(\Throwable $e): string

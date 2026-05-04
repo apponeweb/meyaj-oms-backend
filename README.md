@@ -179,6 +179,275 @@ proxy_read_timeout
   - usar un valor moderado como `300` segundos para cargas grandes controladas
   - si las importaciones siguen creciendo, conviene moverlas a procesamiento en background en vez de seguir aumentando este timeout
 
+## Sección de servidor: deploy y soporte postproducción
+
+Esta sección documenta el flujo de despliegue validado en servidor y los puntos que deben revisarse en soporte si algo falla después de producción.
+
+### Host y ruta validados
+
+- host de API: `apioms.distribuidoradepacasjs.com`
+- ruta del proyecto: `/var/www/backend`
+- document root de nginx: `/var/www/backend/public`
+
+### Servicios validados en servidor
+
+Durante el despliegue se confirmó que los servicios activos usados por la API son:
+
+```bash
+sudo systemctl restart php-fpm
+sudo systemctl restart nginx
+```
+
+No se detectó uso de `symfony server` en producción para servir la API.
+
+### Variable de entorno crítica validada en producción
+
+En el servidor se encontró:
+
+```env
+APP_OPERATION_MODE=INICIALIZANDO
+```
+
+Esto afecta comportamientos sensibles del módulo de pacas y eliminación de unidades.
+
+Antes de cambiar esta variable, validar el objetivo operativo del ambiente:
+
+- `INICIALIZANDO`
+  - permite operaciones profundas útiles para setup o corrección de datos
+- `PRODUCCION`
+  - endurece restricciones para evitar borrados peligrosos
+
+Si esta variable cambia o se agrega por primera vez, ejecutar después:
+
+```bash
+php bin/console cache:clear --env=prod
+php bin/console cache:warmup --env=prod
+sudo systemctl restart php-fpm
+sudo systemctl restart nginx
+```
+
+### Flujo recomendado de deploy en servidor
+
+Desde `/var/www/backend`:
+
+```bash
+git pull --ff-only origin main
+composer install --no-dev --optimize-autoloader --no-interaction
+php bin/console doctrine:migrations:migrate --no-interaction --env=prod
+php bin/console app:seed-modules --env=prod
+php bin/console app:seed-despacho --env=prod
+php bin/console cache:clear --env=prod
+php bin/console cache:warmup --env=prod
+sudo systemctl restart php-fpm
+sudo systemctl restart nginx
+```
+
+### Seeds que deben ejecutarse o validarse
+
+En este proyecto hay datos base que el código asume existentes.
+
+Ejecutar o validar:
+
+```bash
+php bin/console app:seed-modules --env=prod
+php bin/console app:seed-despacho --env=prod
+```
+
+Además, si algo falla en inventario, despacho, devoluciones o importaciones, revisar que existan los motivos de inventario usados por código:
+
+- `PURCHASE`
+- `TRANSFER_IN`
+- `TRANSFER_OUT`
+- `LOSS`
+- `ADJ_IN`
+- `ADJ_OUT`
+- `RESERVE`
+- `RELEASE`
+- `RETURN`
+- `PHYSICAL`
+
+Si faltan, el backend puede fallar al reservar, despachar, devolver, importar o registrar movimientos.
+
+### Catálogo esperado de razones de inventario
+
+El backend actual espera que existan estos registros en `inventory_reason` con estos códigos exactos:
+
+| code | name | direction | is_active |
+|------|------|-----------|-----------|
+| `ADJUSTMENT_IN` | `Ajuste Entrada` | `IN` | `1` |
+| `ADJUSTMENT_OUT` | `Ajuste Salida` | `OUT` | `1` |
+| `LOSS` | `Baja` | `OUT` | `1` |
+| `PHYSICAL_RECEIPT` | `Trazabilidad Física` | `IN` | `1` |
+| `PURCHASE` | `Compra` | `IN` | `1` |
+| `RELEASE` | `Liberación lógica` | `IN` | `1` |
+| `RESERVE` | `Reserva lógica` | `OUT` | `1` |
+| `RETURN` | `Devolución` | `IN` | `1` |
+| `SALE` | `Venta` | `OUT` | `1` |
+| `TRANSFER_IN` | `Transferencia Entrada` | `IN` | `1` |
+| `TRANSFER_OUT` | `Transferencia Salida` | `OUT` | `1` |
+
+Notas operativas:
+
+- los `code` son sensibles y deben coincidir exactamente con los usados en el backend
+- no basta con tener nombres parecidos si el `code` es distinto
+- si el servidor tiene códigos legacy como `COMPRA`, `MOV-AJU` o `MOV-TRA`, eso no sustituye los códigos esperados por el backend actual
+- para soporte, conviene agregar los códigos faltantes sin borrar primero los códigos legacy, y luego evaluar una limpieza controlada por separado
+
+### Caso real detectado en deploy: migración desalineada con la base
+
+Durante el despliegue se presentó este caso:
+
+- Doctrine reportó pendiente la migración `Version20260501042000`
+- esa migración intentaba crear la tabla `customer_import_log`
+- en producción la tabla ya existía
+- el esquema real de base ya estaba sincronizado con el modelo actual
+
+Validación recomendada:
+
+```bash
+php bin/console doctrine:migrations:status --env=prod
+php bin/console doctrine:schema:update --dump-sql --env=prod
+```
+
+Si `doctrine:schema:update --dump-sql` responde:
+
+```text
+[OK] Nothing to update - your database is already in sync with the current mapping file.
+```
+
+y aun así Doctrine marca una migración pendiente que intenta recrear una tabla ya existente, el problema puede ser **desalineación de historial de migraciones**, no del esquema.
+
+En ese escenario:
+
+- no forzar recreación de tabla
+- no borrar tablas productivas para “hacer calzar” Doctrine
+- primero validar si el esquema real ya coincide
+- si coincide, registrar la migración pendiente en la tabla de versiones de Doctrine con criterio controlado
+
+### Archivos locales modificados en servidor
+
+Antes de hacer `git pull`, revisar si el servidor tiene cambios locales:
+
+```bash
+git status --short --branch
+git diff
+```
+
+En el despliegue validado existía un cambio local en:
+
+```text
+config/reference.php
+```
+
+Para no romper la actualización, ese cambio local fue preservado temporalmente con `git stash` antes del `pull`.
+
+Recomendación de soporte:
+
+- si hay cambios locales en archivos de configuración generados o de referencia, preservarlos antes del deploy
+- revisar después si realmente deben reaplicarse o si eran solo artefactos locales
+
+### Validación rápida post deploy
+
+1. Confirmar commit desplegado:
+
+```bash
+git rev-parse --short HEAD
+```
+
+2. Confirmar estado de migraciones:
+
+```bash
+php bin/console doctrine:migrations:status --env=prod
+```
+
+3. Confirmar servicios:
+
+```bash
+systemctl is-active php-fpm
+systemctl is-active nginx
+```
+
+4. Confirmar que el vhost correcto apunte a `/var/www/backend/public`
+
+```bash
+sudo nginx -T | grep -E 'server_name|root '
+```
+
+5. Validar el login en el host real de producción, no solo contra `127.0.0.1`
+
+Ruta válida detectada en backend:
+
+```text
+POST /api/login
+```
+
+Host validado:
+
+```text
+https://apioms.distribuidoradepacasjs.com/api/login
+```
+
+### Limpieza de caché y reinicio de servicios validado en producción
+
+Si después de un deploy, ajuste de variables, inserción de catálogos o cambios de configuración el servidor sigue respondiendo con comportamiento anterior, ejecutar esta secuencia en `/var/www/backend`:
+
+```bash
+php bin/console cache:clear --env=prod
+php bin/console cache:warmup --env=prod
+sudo systemctl restart php-fpm
+sudo systemctl restart nginx
+```
+
+Orden recomendado:
+
+1. limpiar caché de Symfony
+2. recalentar caché de Symfony
+3. reiniciar `php-fpm`
+4. reiniciar `nginx`
+
+Comandos de validación que sí funcionaron en producción:
+
+```bash
+systemctl is-active php-fpm
+systemctl is-active nginx
+sudo nginx -T | grep -E 'server_name apioms\\.distribuidoradepacasjs\\.com|root /var/www/backend/public'
+curl -k -I -s https://apioms.distribuidoradepacasjs.com/api/doc | head -n 5
+```
+
+Resultado esperado:
+
+- `php-fpm` en estado `active`
+- `nginx` en estado `active`
+- vhost apuntando a `/var/www/backend/public`
+- respuesta HTTP `200 OK` al consultar `https://apioms.distribuidoradepacasjs.com/api/doc`
+
+Notas de soporte:
+
+- este reinicio sí ayuda a descartar problemas de caché u `opcache`
+- si después de esta secuencia el error sigue siendo exactamente el mismo, la causa ya no suele ser caché sino código activo o configuración funcional pendiente
+
+### Qué revisar si algo falla después del deploy
+
+- **si falla login con 404**
+  - revisar que se esté probando contra el host/vhost correcto
+  - revisar configuración de nginx y `root /var/www/backend/public`
+
+- **si falla inventario o despacho por motivos no encontrados**
+  - revisar seeds y catálogo de `inventory_reasons`
+
+- **si falla importación**
+  - revisar permisos en `var/` y `var/imports/`
+  - revisar extensión PHP `zip`
+  - revisar timeout de PHP
+
+- **si falla eliminación de unidades/pacas**
+  - revisar valor actual de `APP_OPERATION_MODE`
+
+- **si falla una migración porque una tabla ya existe**
+  - revisar `doctrine:migrations:status`
+  - revisar `doctrine:schema:update --dump-sql --env=prod`
+  - confirmar si el problema es de historial de migraciones y no de esquema real
+
 ## Variable de operación para inicialización y producción
 
 Se agregó la variable de entorno:
