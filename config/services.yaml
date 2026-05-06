@@ -9,6 +9,7 @@
 parameters:
     app.session_timeout_minutes: '%env(int:SESSION_TIMEOUT_MINUTES)%'
     app.zebra_printer_name_default: 'ZDesigner ZD220-203dpi ZPL'
+    app.openai_api_key_fallback: 'your-openai-api-key-here'
 
 services:
     # default configuration for services in *this* file
@@ -20,6 +21,11 @@ services:
     # this creates a service per class whose id is the fully-qualified class name
     App\:
         resource: '../src/'
+
+    # OpenAI Service
+    App\Service\OpenAIService:
+        arguments:
+            $openaiApiKey: '%env(default:app.openai_api_key_fallback:OPENAI_API_KEY)%'
 
     # add more service definitions when explicit configuration is needed
     # please note that last definitions always *replace* previous ones
@@ -47,6 +53,10 @@ services:
             $importDir: '%kernel.project_dir%/var/imports'
 
     App\Service\CustomerExcelService:
+        arguments:
+            $importDir: '%kernel.project_dir%/var/imports'
+
+    App\Service\BrandExcelService:
         arguments:
             $importDir: '%kernel.project_dir%/var/imports'
 
